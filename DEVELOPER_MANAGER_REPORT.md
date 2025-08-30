@@ -39,3 +39,19 @@ This iteration focused on bootstrapping the project structure to prepare for act
 
 *   The presence of the `.gitignore` file was verified.
 *   The new directory structure was verified using `ls -aR`.
+
+---
+
+## Iteration 3: Validation and Legal (2025-08-30)
+
+This iteration focused on adding repository validation tools and addressing legal clarity.
+
+### Implemented Changes
+
+1.  **Added Link-Checking Script:** A shell script (`src/utils/check-links.sh`) was created to automatically verify the external links in `TECHNICAL_PLAN.md`. This improves the long-term quality of the documentation.
+2.  **Added `LICENSE.md` Placeholder:** A placeholder file was added to advise the owner to choose an open-source license, addressing a critical legal gap for the project.
+
+### Verification
+
+*   The link-checking script was created, made executable, and run successfully.
+*   The `LICENSE.md` file was created and its content was verified.

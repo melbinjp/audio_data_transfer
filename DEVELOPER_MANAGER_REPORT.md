@@ -23,3 +23,19 @@ A plan was created to improve the repository's discoverability and structure. Th
 *   The repository now has a clear entry point (`README.md`) and a descriptively named technical plan (`TECHNICAL_PLAN.md`).
 
 The repository is now in a better state for a developer to begin implementation.
+
+---
+
+## Iteration 2: Project Structure (2025-08-30)
+
+This iteration focused on bootstrapping the project structure to prepare for active development.
+
+### Implemented Changes
+
+1.  **Added `.gitignore`:** A standard Node.js `.gitignore` file was added to prevent common development artifacts (like `node_modules`) from being committed.
+2.  **Created Directory Structure:** The directory structure proposed in `TECHNICAL_PLAN.md` (`src/ui`, `src/dsp`, etc.) was created. Each directory includes a `.gitkeep` file to ensure it is tracked by git.
+
+### Verification
+
+*   The presence of the `.gitignore` file was verified.
+*   The new directory structure was verified using `ls -aR`.

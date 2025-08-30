@@ -20,3 +20,7 @@ These tasks are designed to be tackled sequentially to build a working prototype
 | 4 (Low)  | **Set up a testing harness.**                                                                    | QA/Dev          | Medium             |
 |          | - Create a suite of recorded WAV files with different noise levels.                              |                 |                    |
 |          | - Build a script to run the decoding logic against the test files to ensure deterministic results. |                 |                    |
+| 5 (Low)  | **Set up code linting and formatting.**                                                          | Frontend Dev    | Small              |
+|          | - Add ESLint and Prettier to the project.                                                        |                 |                    |
+|          | - Configure rules for consistent code style.                                                     |                 |                    |
+|          | - Add a pre-commit hook to run the linter.                                                       |                 |                    |

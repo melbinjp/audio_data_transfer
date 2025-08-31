@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Data Over Audio</title>
+    <script src="/quiet.js" async></script>
+    <script src="/quiet-emscripten.js" async></script>
+  </head>
+  <body>
+    <h1>Data Over Audio</h1>
+    <div id="app">
+      <div>
+        <button id="mode-file">File Transfer</button>
+        <button id="mode-chat">Chat</button>
+      </div>
+      <hr />
+
+      <div id="file-transfer-mode">
+        <div id="sender">
+          <h2>Sender</h2>
+          <div>
+            <label for="file-picker">Select a file to send:</label>
+            <input type="file" id="file-picker" />
+          </div>
+          <br />
+          <button id="send-button" disabled>Send File</button>
+          <p>Status: <span id="sender-status">Idle</span></p>
+          <progress id="send-progress" value="0" max="100" style="width: 100%;"></progress>
+        </div>
+        <hr />
+        <div id="receiver">
+          <h2>Receiver</h2>
+          <button id="receive-button">Start Receiving</button>
+          <p>Status: <span id="receiver-status">Idle</span></p>
+          <progress id="receive-progress" value="0" max="100" style="width: 100%;"></progress>
+          <br />
+          <canvas id="spectrogram-canvas" width="512" height="150" style="border: 1px solid black;"></canvas>
+          <br />
+          <a id="download-link" style="display: none;"></a>
+        </div>
+      </div>
+
+      <div id="chat-mode" style="display: none;">
+        <h2>Chat</h2>
+        <div id="chat-messages" style="height: 200px; border: 1px solid black; overflow-y: scroll; padding: 5px;"></div>
+        <input type="text" id="chat-input" placeholder="Type a message..." style="width: 80%;" />
+        <button id="chat-send-button">Send</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

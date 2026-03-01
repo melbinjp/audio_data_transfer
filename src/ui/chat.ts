@@ -1,4 +1,4 @@
-import { createChatFrame } from '../transport/framing';
+import { createChatEnvelope } from '../transport/framing';
 import { sendData } from '../dsp/quiet-modem';
 
 const CHAT_HISTORY_KEY = 'chat-history';
@@ -84,11 +84,14 @@ export function initializeChat() {
         addMessage(text, 'me');
         chatInput.value = '';
 
-        const frame = createChatFrame(text);
-        const transmitter = await sendData(frame);
-
-        await new Promise(resolve => setTimeout(resolve, 200));
-        transmitter.destroy();
+        try {
+            // Create a chat envelope and transmit via audio
+            const envelope = createChatEnvelope(text);
+            await sendData(envelope);
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error('Chat send error:', msg);
+        }
     };
 
     chatSendButton.addEventListener('click', sendMessage);

@@ -1,69 +1,104 @@
 let isQuietInitialized = false;
+let initPromise: Promise<void> | null = null;
 
-function stringToArrayBuffer(str: string): ArrayBuffer {
-    const buf = new ArrayBuffer(str.length);
-    const bufView = new Uint8Array(buf);
-    for (let i = 0; i < str.length; i++) {
-        bufView[i] = str.charCodeAt(i);
+/**
+ * Initialize the Quiet.js library.
+ * 
+ * IMPORTANT TIMING: Quiet.init() must be called BEFORE quiet-emscripten.js
+ * finishes loading. The emscripten script calls Quiet.onEmscriptenInitialized()
+ * when it's ready, and the library needs profilesPrefix set before that happens
+ * so it can fetch quiet-profiles.json. If both conditions (emscripten loaded +
+ * profiles fetched) are met, the ready callbacks fire.
+ * 
+ * We call init() eagerly when this module is first imported (see bottom of file).
+ */
+function doInit(): Promise<void> {
+    if (initPromise) {
+        return initPromise;
     }
-    return buf;
+
+    initPromise = new Promise((resolve, reject) => {
+        // Use Vite's BASE_URL to correctly resolve paths when the app is
+        // served under a sub-path (e.g., /audio_data_transfer/).
+        const base = import.meta.env.BASE_URL || '/';
+
+        // Quiet.init() tells the library where to find:
+        //   - quiet-profiles.json (at profilesPrefix + "quiet-profiles.json")
+        //   - quiet-emscripten.js.mem (at memoryInitializerPrefix + "quiet-emscripten.js.mem")
+        //   - libfec.js (at libfecPrefix + "libfec.js")
+        // onReady fires when both emscripten and profiles are loaded.
+        Quiet.init({
+            profilesPrefix: base,
+            memoryInitializerPrefix: base,
+            libfecPrefix: base,
+            onReady: () => {
+                isQuietInitialized = true;
+                console.log("Quiet.js initialized successfully.");
+                resolve();
+            },
+            onError: (reason: string) => {
+                console.error("Quiet.js initialization failed:", reason);
+                reject(new Error(`Quiet init failed: ${reason}`));
+            },
+        });
+    });
+
+    return initPromise;
 }
 
-function arrayBufferToString(buf: ArrayBuffer): string {
-    return String.fromCharCode.apply(null, Array.from(new Uint8Array(buf)));
-}
-
+/**
+ * Wait for Quiet.js to be ready. If already initialized, resolves immediately.
+ */
 export function initQuiet(): Promise<void> {
-    if (isQuietInitialized) {
-        return Promise.resolve();
-    }
-    return new Promise((resolve, reject) => {
-        Quiet.addReadyCallback(async () => {
-            try {
-                // quiet-js-profiles.json should be served from the public directory
-                const response = await fetch('quiet-js-profiles.json');
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch profiles: ${response.statusText}`);
-                }
-                const profiles = await response.json();
-                Quiet.init({ profiles, onInitialized: () => {
-                    isQuietInitialized = true;
-                    resolve();
-                } });
-            } catch (error) {
-                reject(error);
-            }
-        }, (reason) => reject(reason));
-    });
+    return doInit();
 }
 
-export async function sendData(data: ArrayBuffer) {
+// Eagerly start initialization as soon as this module is imported.
+// This ensures the profiles prefix is set before quiet-emscripten.js
+// finishes loading (which happens asynchronously via the <script async> tag).
+doInit().catch((err) => {
+    console.error("Early Quiet.js init failed (will retry on first use):", err);
+    // Reset so it can be retried on first actual use
+    initPromise = null;
+});
+
+/**
+ * Transmit an ArrayBuffer as audio.
+ * Returns a Promise that resolves when onFinish fires (all audio played out).
+ * The transmitter handles internal framing — just pass the full data buffer.
+ */
+export async function sendData(data: ArrayBuffer): Promise<void> {
     await initQuiet();
-    const transmitter = Quiet.transmitter({
-        profile: 'ultrasonic-fsk', // A robust default profile
-        onFinish: () => {
-            console.log('Transmission finished.');
-            // The transmitter is destroyed by the caller
-        },
+    return new Promise((resolve, reject) => {
+        try {
+            const transmitter = Quiet.transmitter({
+                profile: 'audible',
+                onFinish: () => {
+                    console.log('Transmission finished.');
+                    transmitter.destroy();
+                    resolve();
+                },
+                clampFrame: true,
+            });
+            transmitter.transmit(data);
+        } catch (err) {
+            reject(err);
+        }
     });
-    transmitter.transmit(data);
-    return transmitter;
 }
 
+/**
+ * Start listening for audio data via the microphone.
+ * Returns an AnalyserNode for spectrogram visualization.
+ * The onData callback fires for each received frame from Quiet.
+ */
 export async function startListening(onData: (data: ArrayBuffer) => void): Promise<{ analyser: AnalyserNode }> {
     await initQuiet();
 
-    // The Quiet receiver function in the original library is complex and
-    // doesn't directly expose the AudioNode for us to connect an analyser.
-    // The library creates its own audio context and graph internally.
-    // To implement a spectrogram, we need to get access to the raw microphone stream
-    // before it goes into the Quiet receiver.
-
-    // We will create our own AudioContext and connect the microphone stream to both
-    // the Quiet receiver and our AnalyserNode. This is a common pattern for
-    // visualization when working with black-box audio libraries.
-
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    // Create our own AudioContext for the spectrogram analyser.
+    // Quiet.js creates its own internal AudioContext for the receiver,
+    // so we run a parallel analyser on the raw mic stream for visualization.
+    const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
     await audioCtx.resume();
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -72,23 +107,21 @@ export async function startListening(onData: (data: ArrayBuffer) => void): Promi
     const analyser = audioCtx.createAnalyser();
     source.connect(analyser);
 
-    // Now, we need to pass this stream to Quiet.js.
-    // The `Quiet.receiver` function doesn't take a stream as an argument.
-    // This is a limitation of the library as used.
-    // However, Quiet.js internally calls getUserMedia. If we call it before
-    // quiet.js, it might reuse the existing permission and stream.
-    // The visualization will work, but it will be on a parallel path to Quiet's processing.
-
+    // Create the Quiet receiver. It will call getUserMedia internally as well.
+    // Both our analyser and Quiet's receiver will process the mic stream.
     Quiet.receiver({
-        profile: 'ultrasonic-fsk',
+        profile: 'audible',
         onReceive: (payload) => {
             onData(payload);
         },
-        onCreateFailed: (reason) => {
+        onCreate: () => {
+            console.log('Quiet receiver created and listening.');
+        },
+        onCreateFail: (reason) => {
             console.error('Failed to create receiver:', reason);
         },
-        onReceiveFailed: (num_fails) => {
-            console.error(`Receive failed after ${num_fails} attempts.`);
+        onReceiveFail: (num_fails) => {
+            console.warn(`Receive checksum failures: ${num_fails}`);
         },
     });
 

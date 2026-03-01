@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Data Over Audio</title>
-    <script src="/quiet.js" async></script>
+    <!-- quiet.js MUST load synchronously before quiet-emscripten.js -->
+    <script src="/quiet.js"></script>
     <script src="/quiet-emscripten.js" async></script>
   </head>
   <body>

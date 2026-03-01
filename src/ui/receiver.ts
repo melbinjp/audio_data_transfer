@@ -1,5 +1,5 @@
 import { startListening } from '../dsp/quiet-modem';
-import { deframe, reassembleFile } from '../transport/framing';
+import { ReassemblyBuffer } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 import { displayChatMessage } from './chat';
 
@@ -23,44 +23,53 @@ export function initializeReceiver() {
       spectrogram.stop();
     }
 
+    const reassembly = new ReassemblyBuffer();
+
     try {
-      const { analyser } = await startListening((frame) => {
+      const { analyser } = await startListening((chunk) => {
         try {
-          const { header, payload } = deframe(frame);
+          const result = reassembly.addChunk(chunk);
 
-          if (header.type === 'file' && header.fileName) {
-            statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${header.totalFrames} of ${header.fileName}`;
-            receiveProgress.max = header.totalFrames!;
-            receiveProgress.value = header.frameIndex! + 1;
-
-            const file = reassembleFile(header, payload);
-            if (file) {
-              statusEl.textContent = `File "${file.name}" received!`;
-              const url = URL.createObjectURL(file);
-              downloadLink.href = url;
-              downloadLink.download = file.name;
-              downloadLink.textContent = `Download ${file.name}`;
-              downloadLink.style.display = 'block';
-              receiveButton.disabled = false; // Or stop listening
-              if (spectrogram) {
-                spectrogram.stop();
-              }
-            }
-          } else if (header.type === 'chat' && header.text) {
-            displayChatMessage(header.text);
+          // Show progress if we know the expected length
+          const expected = reassembly.expectedLength;
+          if (expected > 0) {
+            receiveProgress.max = expected;
+            receiveProgress.value = reassembly.bytesReceived;
+            statusEl.textContent = `Receiving: ${reassembly.bytesReceived}/${expected} bytes...`;
           }
-        } catch (error) {
+
+          if (result === null) {
+            return; // More data needed
+          }
+
+          if (result.type === 'file') {
+            statusEl.textContent = `File "${result.fileName}" received!`;
+            receiveProgress.value = receiveProgress.max;
+            const blob = new Blob([result.fileData], { type: result.fileType });
+            const url = URL.createObjectURL(blob);
+            downloadLink.href = url;
+            downloadLink.download = result.fileName;
+            downloadLink.textContent = `Download ${result.fileName}`;
+            downloadLink.style.display = 'block';
+          } else if (result.type === 'chat') {
+            displayChatMessage(result.text);
+            statusEl.textContent = 'Listening...';
+          }
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
           console.error('Frame error:', error);
-          statusEl.textContent = `Error: ${error.message}. Waiting for next frame...`;
+          statusEl.textContent = `Error: ${msg}. Waiting for next transmission...`;
+          reassembly.reset();
         }
       });
 
       spectrogram = new Spectrogram(spectrogramCanvas, analyser);
       spectrogram.start();
 
-    } catch (error) {
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
       console.error('Error starting listener:', error);
-      statusEl.textContent = `Error: ${error.message}`;
+      statusEl.textContent = `Error: ${msg}`;
       receiveButton.disabled = false;
     }
   });

@@ -1,8 +1,7 @@
 {
-  "name": "app",
+  "name": "audio-data-transfer",
   "version": "1.0.0",
-  "description": "This repository contains the technical plan for a web-based application designed to transmit arbitrary data (files, text, etc.) between devices using audio.",
-  "main": "index.js",
+  "description": "A web-based application to transmit arbitrary data between devices using audio.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,10 +11,14 @@
     "type": "git",
     "url": "git+https://github.com/melbinjp/audio_data_transfer.git"
   },
-  "keywords": [],
+  "keywords": [
+    "audio",
+    "data-transfer",
+    "quiet-js",
+    "web-audio"
+  ],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/melbinjp/audio_data_transfer/issues"
   },
@@ -28,7 +31,6 @@
   },
   "dependencies": {
     "crc-32": "^1.2.2",
-    "fft.js": "^4.0.4",
-    "quiet-js": "^1.0.0"
+    "libfec": "*"
   }
 }

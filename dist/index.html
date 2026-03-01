@@ -4,9 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Data Over Audio</title>
-    <script src="/quiet.js" async></script>
-    <script src="/quiet-emscripten.js" async></script>
-    <script type="module" crossorigin src="/audio_data_transfer/assets/index-CEpg0nX3.js"></script>
+    <!-- quiet.js MUST load synchronously before quiet-emscripten.js -->
+    <script src="/audio_data_transfer/quiet.js"></script>
+    <script src="/audio_data_transfer/quiet-emscripten.js" async></script>
+    <script type="module" crossorigin src="/audio_data_transfer/assets/index-BUKxv61s.js"></script>
   </head>
   <body>
     <h1>Data Over Audio</h1>
@@ -48,6 +49,6 @@
         <input type="text" id="chat-input" placeholder="Type a message..." style="width: 80%;" />
         <button id="chat-send-button">Send</button>
       </div>
-    </div>
+    </div>
   </body>
 </html>

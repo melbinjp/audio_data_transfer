@@ -1,158 +1,154 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import {
-    createChatEnvelope,
-    createFileEnvelope,
-    decodeEnvelope,
-    ReassemblyBuffer,
-    FRAME_TYPE_CHAT,
-    FRAME_TYPE_FILE,
+    createFileDataFrames,
+    deframe,
+    ReassemblyManager,
+    FrameHeader,
+    createFileStartFrame,
+    createAckFrame,
+    createAckStartFrame
 } from './framing';
+import CRC32 from 'crc-32';
 
 describe('framing', () => {
-    describe('createChatEnvelope / decodeEnvelope', () => {
-        it('should round-trip a chat message', () => {
-            const text = 'Hello, World!';
-            const envelope = createChatEnvelope(text);
-            const result = decodeEnvelope(envelope);
+    let testFile: File;
+    let fileBuffer: ArrayBuffer;
 
-            expect(result.type).toBe('chat');
-            if (result.type === 'chat') {
-                expect(result.text).toBe(text);
-            }
-        });
-
-        it('should round-trip a chat message with unicode', () => {
-            const text = '🎵 Audio transfer 日本語テスト';
-            const envelope = createChatEnvelope(text);
-            const result = decodeEnvelope(envelope);
-
-            expect(result.type).toBe('chat');
-            if (result.type === 'chat') {
-                expect(result.text).toBe(text);
-            }
-        });
-
-        it('should have correct envelope header bytes', () => {
-            const text = 'Test';
-            const envelope = createChatEnvelope(text);
-            const view = new DataView(envelope);
-
-            expect(view.getUint8(0)).toBe(FRAME_TYPE_CHAT);
-            // total length = 9 (header) + 4 (utf8 "Test") = 13
-            expect(view.getUint32(1, true)).toBe(13);
-        });
+    beforeAll(async () => {
+        const fileContent = 'Hello, this is a test file for the data over audio project.';
+        fileBuffer = new TextEncoder().encode(fileContent).buffer;
+        testFile = new File([fileBuffer], 'test.txt', { type: 'text/plain' });
     });
 
-    describe('createFileEnvelope / decodeEnvelope', () => {
-        it('should round-trip a file', () => {
-            const content = 'Hello, this is a test file for the data over audio project.';
-            const fileData = new TextEncoder().encode(content).buffer;
-            const file = new File([fileData], 'test.txt', { type: 'text/plain' });
+    it('should create file data frames with correct headers', async () => {
+        const frames = createFileDataFrames(fileBuffer, 'test-file-id');
 
-            const envelope = createFileEnvelope(file, fileData);
-            const result = decodeEnvelope(envelope);
+        expect(frames.length).toBe(1); // The test file is small
+        const frame = frames[0];
+        const frameView = new Uint8Array(frame);
 
-            expect(result.type).toBe('file');
-            if (result.type === 'file') {
-                expect(result.fileName).toBe('test.txt');
-                expect(result.fileType).toBe('text/plain');
-                const decoded = new TextDecoder().decode(result.fileData);
-                expect(decoded).toBe(content);
-            }
-        });
+        const headerLength = frameView[0];
+        const headerBuffer = frame.slice(1, 1 + headerLength);
+        const payload = frame.slice(1 + headerLength);
 
-        it('should have correct envelope header bytes', () => {
-            const fileData = new Uint8Array([1, 2, 3, 4]).buffer;
-            const file = new File([fileData], 'data.bin', { type: 'application/octet-stream' });
+        const headerString = new TextDecoder().decode(headerBuffer);
+        const header: FrameHeader = JSON.parse(headerString);
 
-            const envelope = createFileEnvelope(file, fileData);
-            const view = new DataView(envelope);
-
-            expect(view.getUint8(0)).toBe(FRAME_TYPE_FILE);
-            // total length should be > 9 (header) + metadata + 4 (file bytes)
-            expect(view.getUint32(1, true)).toBeGreaterThan(13);
-        });
+        expect(header.frameIndex).toBe(0);
+        expect(header.totalFrames).toBe(1);
+        expect(header.crc32).toBe(CRC32.buf(new Uint8Array(payload)));
+        expect(payload.byteLength).toBe(fileBuffer.byteLength);
     });
 
-    describe('CRC validation', () => {
-        it('should throw on corrupted envelope', () => {
-            const envelope = createChatEnvelope('Test');
-            const corrupted = new Uint8Array(envelope);
-            corrupted[corrupted.length - 1] ^= 0xFF; // Flip last byte
+    it('should deframe a valid file-data frame', async () => {
+        const frames = createFileDataFrames(fileBuffer, 'test-file-id');
+        const frame = frames[0];
 
-            expect(() => decodeEnvelope(corrupted.buffer)).toThrow('CRC32 mismatch');
-        });
+        const { header, payload } = deframe(frame);
+
+        expect(header.type).toBe('file-data');
+        expect(header.fileId).toBe('test-file-id');
+        expect(payload.byteLength).toBe(fileBuffer.byteLength);
+        expect(new Uint8Array(payload)).toEqual(new Uint8Array(fileBuffer));
     });
 
-    describe('ReassemblyBuffer', () => {
-        it('should reassemble a chat envelope from small chunks', () => {
-            const text = 'Hello from audio!';
-            const envelope = createChatEnvelope(text);
-            const buffer = new ReassemblyBuffer();
+    it('should create a file-start frame', () => {
+        const frame = createFileStartFrame(testFile, 'test-file-id');
+        const { header, payload } = deframe(frame);
 
-            // Simulate 5-byte chunks (smaller than quiet-js's typical 20-byte frames)
-            const bytes = new Uint8Array(envelope);
-            const chunkSize = 5;
-            let result = null;
+        expect(header.type).toBe('file-start');
+        expect(header.fileId).toBe('test-file-id');
+        expect(header.fileName).toBe('test.txt');
+        expect(header.fileType).toBe('text/plain');
+        expect(header.totalFrames).toBe(1);
+        expect(payload.byteLength).toBe(0);
+    });
 
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.slice(i, i + chunkSize).buffer;
-                result = buffer.addChunk(chunk);
-                if (result !== null) break;
-            }
+    it('should create an ack frame', () => {
+        const frame = createAckFrame('test-file-id', 5);
+        const { header, payload } = deframe(frame);
 
-            expect(result).not.toBeNull();
-            expect(result!.type).toBe('chat');
-            if (result!.type === 'chat') {
-                expect(result!.text).toBe(text);
-            }
+        expect(header.type).toBe('ack');
+        expect(header.fileId).toBe('test-file-id');
+        expect(header.frameIndex).toBe(5);
+        expect(payload.byteLength).toBe(0);
+    });
+
+    it('should create an ack-start frame', () => {
+        const frame = createAckStartFrame('test-file-id');
+        const { header, payload } = deframe(frame);
+
+        expect(header.type).toBe('ack-start');
+        expect(header.fileId).toBe('test-file-id');
+        expect(payload.byteLength).toBe(0);
+    });
+
+    it('should throw an error for a frame with a CRC mismatch', async () => {
+        const frames = createFileDataFrames(fileBuffer, 'test-file-id');
+        const frame = frames[0];
+
+        // Tamper with the payload
+        const tamperedFrame = new Uint8Array(frame.slice(0)); // Create a copy
+        const headerLength = tamperedFrame[0];
+        const payloadStartIndex = 1 + headerLength;
+        tamperedFrame[payloadStartIndex]++; // Change the first byte of the payload
+
+        expect(() => deframe(tamperedFrame.buffer)).toThrow('CRC32 mismatch');
+    });
+
+    describe('ReassemblyManager', () => {
+        let manager: ReassemblyManager;
+
+        beforeEach(() => {
+            manager = new ReassemblyManager();
         });
 
-        it('should reassemble a file envelope from chunks', () => {
-            const content = 'File content here';
-            const fileData = new TextEncoder().encode(content).buffer;
-            const file = new File([fileData], 'small.txt', { type: 'text/plain' });
-
-            const envelope = createFileEnvelope(file, fileData);
-            const buffer = new ReassemblyBuffer();
-
-            // Simulate 10-byte chunks
-            const bytes = new Uint8Array(envelope);
-            const chunkSize = 10;
-            let result = null;
-
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.slice(i, i + chunkSize).buffer;
-                result = buffer.addChunk(chunk);
-                if (result !== null) break;
-            }
-
-            expect(result).not.toBeNull();
-            expect(result!.type).toBe('file');
-            if (result!.type === 'file') {
-                expect(result!.fileName).toBe('small.txt');
-                const decoded = new TextDecoder().decode(result!.fileData);
-                expect(decoded).toBe(content);
-            }
+        afterEach(() => {
+            manager.destroy();
         });
 
-        it('should return null when data is incomplete', () => {
-            const envelope = createChatEnvelope('Hello');
-            const buffer = new ReassemblyBuffer();
+        it('should reassemble a file from multiple frames', async () => {
+            const longFileContent = 'a'.repeat(1000);
+            const longFileBuffer = new TextEncoder().encode(longFileContent).buffer;
+            const fileId = 'long-file-id';
+            const frames = createFileDataFrames(longFileBuffer, fileId);
+            let resultFile: File | null = null;
 
-            // Only send first 3 bytes (less than header)
-            const bytes = new Uint8Array(envelope);
-            const result = buffer.addChunk(bytes.slice(0, 3).buffer);
+            // Start the process with a file-start frame
+            const startFrame = createFileStartFrame(new File([longFileContent], 'long.txt', {type: 'text/plain'}), fileId);
+            const { header: startHeader } = deframe(startFrame);
+            manager.getReassembler(startHeader);
 
-            expect(result).toBeNull();
+
+            for (const frame of frames) {
+                const { header, payload } = deframe(frame);
+                resultFile = manager.processFrame(header, payload);
+            }
+
+            expect(resultFile).not.toBeNull();
+            expect(resultFile!.name).toBe('long.txt');
+            const resultBuffer = await resultFile!.arrayBuffer();
+            expect(resultBuffer.byteLength).toBe(1000);
         });
 
-        it('should track bytesReceived', () => {
-            const buffer = new ReassemblyBuffer();
-            buffer.addChunk(new Uint8Array([1, 2, 3]).buffer);
-            expect(buffer.bytesReceived).toBe(3);
-            buffer.addChunk(new Uint8Array([4, 5]).buffer);
-            expect(buffer.bytesReceived).toBe(5);
+        it('should not reassemble an incomplete file', async () => {
+            const longFileContent = 'a'.repeat(1000);
+            const longFileBuffer = new TextEncoder().encode(longFileContent).buffer;
+            const fileId = 'long-file-id';
+            const frames = createFileDataFrames(longFileBuffer, fileId);
+            let resultFile: File | null = null;
+
+            const startFrame = createFileStartFrame(new File([longFileContent], 'long.txt', {type: 'text/plain'}), fileId);
+            const { header: startHeader } = deframe(startFrame);
+            manager.getReassembler(startHeader);
+
+            // Skip the last frame
+            for (let i = 0; i < frames.length - 1; i++) {
+                const { header, payload } = deframe(frames[i]);
+                resultFile = manager.processFrame(header, payload);
+            }
+
+            expect(resultFile).toBeNull();
         });
     });
 });

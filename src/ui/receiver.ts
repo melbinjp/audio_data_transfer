@@ -1,76 +1,92 @@
-import { startListening } from '../dsp/quiet-modem';
-import { ReassemblyBuffer } from '../transport/framing';
+import { sendData, startListening } from '../dsp/quiet-modem';
+import { createAckFrame, createAckStartFrame, deframe, ReassemblyManager } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
-import { displayChatMessage } from './chat';
 
+/**
+ * Initializes the receiver UI, wiring up the receive button and handling
+ * the logic for receiving frames, sending ACKs, and reassembling the file.
+ */
 export function initializeReceiver() {
-  const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
-  const statusEl = document.getElementById('receiver-status') as HTMLSpanElement;
-  const downloadLink = document.getElementById('download-link') as HTMLAnchorElement;
-  const receiveProgress = document.getElementById('receive-progress') as HTMLProgressElement;
-  const spectrogramCanvas = document.getElementById('spectrogram-canvas') as HTMLCanvasElement;
+    const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
+    const statusEl = document.getElementById('receiver-status') as HTMLSpanElement;
+    const downloadLink = document.getElementById('download-link') as HTMLAnchorElement;
+    const receiveProgress = document.getElementById('receive-progress') as HTMLProgressElement;
+    const spectrogramCanvas = document.getElementById('spectrogram-canvas') as HTMLCanvasElement;
 
-  let spectrogram: Spectrogram | null = null;
+    let spectrogram: Spectrogram | null = null;
+    let reassemblyManager: ReassemblyManager | null = null;
 
-  receiveButton.addEventListener('click', async () => {
-    console.log('Starting to listen...');
-    receiveButton.disabled = true;
-    statusEl.textContent = 'Listening...';
-    downloadLink.style.display = 'none';
-    receiveProgress.value = 0;
+    receiveButton.addEventListener('click', async () => {
+        console.log('Starting to listen...');
+        receiveButton.disabled = true;
+        statusEl.textContent = 'Listening...';
+        downloadLink.style.display = 'none';
+        receiveProgress.value = 0;
 
-    if (spectrogram) {
-      spectrogram.stop();
-    }
-
-    const reassembly = new ReassemblyBuffer();
-
-    try {
-      const { analyser } = await startListening((chunk) => {
-        try {
-          const result = reassembly.addChunk(chunk);
-
-          // Show progress if we know the expected length
-          const expected = reassembly.expectedLength;
-          if (expected > 0) {
-            receiveProgress.max = expected;
-            receiveProgress.value = reassembly.bytesReceived;
-            statusEl.textContent = `Receiving: ${reassembly.bytesReceived}/${expected} bytes...`;
-          }
-
-          if (result === null) {
-            return; // More data needed
-          }
-
-          if (result.type === 'file') {
-            statusEl.textContent = `File "${result.fileName}" received!`;
-            receiveProgress.value = receiveProgress.max;
-            const blob = new Blob([result.fileData], { type: result.fileType });
-            const url = URL.createObjectURL(blob);
-            downloadLink.href = url;
-            downloadLink.download = result.fileName;
-            downloadLink.textContent = `Download ${result.fileName}`;
-            downloadLink.style.display = 'block';
-          } else if (result.type === 'chat') {
-            displayChatMessage(result.text);
-            statusEl.textContent = 'Listening...';
-          }
-        } catch (error: unknown) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.error('Frame error:', error);
-          statusEl.textContent = `Error: ${msg}. Waiting for next transmission...`;
-          reassembly.reset();
+        if (spectrogram) {
+            spectrogram.stop();
         }
-      });
+        if (reassemblyManager) {
+            reassemblyManager.destroy();
+        }
+        reassemblyManager = new ReassemblyManager();
 
-      spectrogram = new Spectrogram(spectrogramCanvas, analyser);
-      spectrogram.start();
+        try {
+            const { analyser } = await startListening(async (frame) => {
+                try {
+                    const { header, payload } = deframe(frame);
 
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('Error starting listener:', error);
-      statusEl.textContent = `Error: ${msg}`;
-      receiveButton.disabled = false;
-    }
-  });
+                    switch (header.type) {
+                        case 'file-start': {
+                            reassemblyManager!.getReassembler(header);
+                            statusEl.textContent = `Receiving file: ${header.fileName}`;
+                            await sendData(createAckStartFrame(header.fileId));
+                            break;
+                        }
+                        case 'file-data': {
+                            statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${header.totalFrames}`;
+                            receiveProgress.max = header.totalFrames!;
+                            receiveProgress.value = header.frameIndex! + 1;
+
+                            await sendData(createAckFrame(header.fileId, header.frameIndex!));
+
+                            const file = reassemblyManager!.processFrame(header, payload);
+                            if (file) {
+                                statusEl.textContent = `File "${file.name}" received!`;
+                                const url = URL.createObjectURL(file);
+                                downloadLink.href = url;
+                                downloadLink.download = file.name;
+                                downloadLink.textContent = `Download ${file.name}`;
+                                downloadLink.style.display = 'block';
+                                receiveButton.disabled = false;
+                                if (spectrogram) {
+                                    spectrogram.stop();
+                                }
+                                reassemblyManager?.destroy();
+                                reassemblyManager = null;
+                            }
+                            break;
+                        }
+                    }
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    console.error('Frame error:', err);
+                    statusEl.textContent = `Error: ${msg}. Waiting for next frame...`;
+                }
+            });
+
+            spectrogram = new Spectrogram(spectrogramCanvas, analyser);
+            spectrogram.start();
+
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('Error starting listener:', err);
+            statusEl.textContent = `Error: ${msg}`;
+            receiveButton.disabled = false;
+            if (reassemblyManager) {
+                reassemblyManager.destroy();
+                reassemblyManager = null;
+            }
+        }
+    });
 }

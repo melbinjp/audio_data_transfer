@@ -1,206 +1,299 @@
 import CRC32 from 'crc-32';
 
 /**
- * Transport framing for data-over-audio.
- *
- * Quiet.js handles its own internal framing at the PHY layer (e.g., 20-25 byte
- * frames). When we call transmitter.transmit(buffer), it internally slices the
- * buffer into PHY frames. On the receiver side, onReceive fires once per PHY
- * frame with the decoded payload.
- *
- * Our transport layer wraps the entire message in a simple envelope:
- *   [1 byte type] [4 bytes total length] [4 bytes CRC32] [N bytes payload]
- *
- * For file transfers, we prefix the payload with file metadata.
- * For chat, the payload IS the text message.
- *
- * Since quiet-js delivers data frame-by-frame (each ~20 bytes), we accumulate
- * received frames into a reassembly buffer until we have the complete message.
+ * The size of the payload for each data frame, in bytes.
  */
+const PAYLOAD_SIZE = 512;
 
-export const FRAME_TYPE_FILE = 0x01;
-export const FRAME_TYPE_CHAT = 0x02;
+/**
+ * Defines the different types of frames used in the protocol.
+ * - `file-start`: Initiates a file transfer, containing metadata about the file.
+ * - `file-data`: Carries a chunk of the file's data.
+ * - `ack`: Acknowledges the successful receipt of a `file-data` frame.
+ * - `ack-start`: Acknowledges the successful receipt of a `file-start` frame.
+ */
+export type FrameType = 'file-start' | 'file-data' | 'ack' | 'ack-start';
 
-const ENVELOPE_HEADER_SIZE = 9; // 1 type + 4 length + 4 crc
-
-export interface FileMetadata {
-    fileName: string;
-    fileType: string;
+/**
+ * Represents the header of a single frame.
+ */
+export interface FrameHeader {
+    /** The type of the frame. */
+    type: FrameType;
+    /** A unique identifier for the file transfer session. */
+    fileId: string;
+    /** The name of the file being transferred (only in `file-start` frames). */
+    fileName?: string;
+    /** The MIME type of the file (only in `file-start` frames). */
+    fileType?: string;
+    /** The total number of data frames for the file (only in `file-start` and `file-data` frames). */
+    totalFrames?: number;
+    /** The index of the current data frame (for `file-data` and `ack` frames). */
+    frameIndex?: number;
+    /** The CRC32 checksum of the payload (only for `file-data` frames). */
+    crc32?: number;
 }
 
 /**
- * Create a complete envelope buffer for a chat message.
- * Format: [type=0x02][totalLen:u32][crc32:i32][utf8 text]
+ * Creates a frame by combining a header and an optional payload into a single ArrayBuffer.
+ * The frame format is `[header_length (1 byte)] [json_header] [payload]`.
+ * @param header The frame header object.
+ * @param payload An optional payload as an ArrayBuffer.
+ * @returns The combined frame as an ArrayBuffer.
  */
-export function createChatEnvelope(text: string): ArrayBuffer {
-    const textBytes = new TextEncoder().encode(text);
-    const totalLen = ENVELOPE_HEADER_SIZE + textBytes.length;
-    const buffer = new ArrayBuffer(totalLen);
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
+function createFrame(header: FrameHeader, payload?: ArrayBuffer): ArrayBuffer {
+    const headerString = JSON.stringify(header);
+    const headerBuffer = new TextEncoder().encode(headerString);
+    if (headerBuffer.length > 255) {
+        throw new Error('Header is too large for a 1-byte length prefix!');
+    }
 
-    view.setUint8(0, FRAME_TYPE_CHAT);
-    view.setUint32(1, totalLen, true); // little-endian
-    // CRC32 over the payload (text)
-    const crc = CRC32.buf(textBytes);
-    view.setInt32(5, crc, true);
-    bytes.set(textBytes, ENVELOPE_HEADER_SIZE);
+    const payloadLength = payload ? payload.byteLength : 0;
+    const frame = new ArrayBuffer(1 + headerBuffer.length + payloadLength);
+    const frameView = new Uint8Array(frame);
 
-    return buffer;
+    frameView[0] = headerBuffer.length;
+    frameView.set(headerBuffer, 1);
+    if (payload) {
+        frameView.set(new Uint8Array(payload), 1 + headerBuffer.length);
+    }
+
+    return frame;
 }
 
 /**
- * Create a complete envelope buffer for a file transfer.
- * Format: [type=0x01][totalLen:u32][crc32:i32][metaLen:u16][JSON meta][file bytes]
+ * Creates a `file-start` frame to initiate a file transfer.
+ * @param file The file to be transferred.
+ * @param fileId A unique ID for this transfer session.
+ * @returns An ArrayBuffer representing the `file-start` frame.
  */
-export function createFileEnvelope(file: File, fileData: ArrayBuffer): ArrayBuffer {
-    const meta: FileMetadata = {
+export function createFileStartFrame(file: File, fileId: string): ArrayBuffer {
+    const totalFrames = Math.ceil(file.size / PAYLOAD_SIZE);
+    const header: FrameHeader = {
+        type: 'file-start',
+        fileId,
         fileName: file.name,
-        fileType: file.type || 'application/octet-stream',
+        fileType: file.type,
+        totalFrames,
     };
-    const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
-    const fileBytes = new Uint8Array(fileData);
-
-    const payloadLen = 2 + metaBytes.length + fileBytes.length; // 2 for metaLen
-    const totalLen = ENVELOPE_HEADER_SIZE + payloadLen;
-    const buffer = new ArrayBuffer(totalLen);
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
-
-    view.setUint8(0, FRAME_TYPE_FILE);
-    view.setUint32(1, totalLen, true);
-
-    // CRC32 over the entire payload (meta length + meta + file data)
-    const payloadSlice = new Uint8Array(payloadLen);
-    const payloadView = new DataView(payloadSlice.buffer);
-    payloadView.setUint16(0, metaBytes.length, true);
-    payloadSlice.set(metaBytes, 2);
-    payloadSlice.set(fileBytes, 2 + metaBytes.length);
-
-    const crc = CRC32.buf(payloadSlice);
-    view.setInt32(5, crc, true);
-
-    bytes.set(payloadSlice, ENVELOPE_HEADER_SIZE);
-
-    return buffer;
+    return createFrame(header);
 }
 
 /**
- * Decoded envelope result.
+ * Creates an `ack` frame to acknowledge a received data frame.
+ * @param fileId The ID of the file transfer session.
+ * @param frameIndex The index of the frame being acknowledged.
+ * @returns An ArrayBuffer representing the `ack` frame.
  */
-export type DecodedEnvelope =
-    | { type: 'chat'; text: string }
-    | { type: 'file'; fileName: string; fileType: string; fileData: ArrayBuffer };
+export function createAckFrame(fileId: string, frameIndex: number): ArrayBuffer {
+    const header: FrameHeader = {
+        type: 'ack',
+        fileId,
+        frameIndex,
+    };
+    return createFrame(header);
+}
 
 /**
- * Decode a complete envelope buffer.
- * Throws if CRC check fails.
+ * Creates an `ack-start` frame to acknowledge the `file-start` frame.
+ * @param fileId The ID of the file transfer session.
+ * @returns An ArrayBuffer representing the `ack-start` frame.
  */
-export function decodeEnvelope(buffer: ArrayBuffer): DecodedEnvelope {
-    const view = new DataView(buffer);
-    const bytes = new Uint8Array(buffer);
-    const type = view.getUint8(0);
-    const totalLen = view.getUint32(1, true);
-    const expectedCrc = view.getInt32(5, true);
+export function createAckStartFrame(fileId: string): ArrayBuffer {
+    const header: FrameHeader = {
+        type: 'ack-start',
+        fileId,
+    };
+    return createFrame(header);
+}
 
-    if (buffer.byteLength < totalLen) {
-        throw new Error(`Incomplete envelope: expected ${totalLen} bytes, got ${buffer.byteLength}`);
-    }
+/**
+ * Chunks a file buffer into an array of `file-data` frames.
+ * @param fileBuffer The file content as an ArrayBuffer.
+ * @param fileId The ID for this transfer session.
+ * @returns An array of `file-data` frames.
+ */
+export function createFileDataFrames(fileBuffer: ArrayBuffer, fileId: string): ArrayBuffer[] {
+    const totalFrames = Math.ceil(fileBuffer.byteLength / PAYLOAD_SIZE);
+    const frames: ArrayBuffer[] = [];
 
-    const payload = bytes.slice(ENVELOPE_HEADER_SIZE, totalLen);
-    const actualCrc = CRC32.buf(payload);
+    for (let i = 0; i < totalFrames; i++) {
+        const start = i * PAYLOAD_SIZE;
+        const end = start + PAYLOAD_SIZE;
+        const payload = fileBuffer.slice(start, end);
 
-    if (actualCrc !== expectedCrc) {
-        throw new Error(`CRC32 mismatch: expected ${expectedCrc}, got ${actualCrc}`);
-    }
-
-    if (type === FRAME_TYPE_CHAT) {
-        const text = new TextDecoder().decode(payload);
-        return { type: 'chat', text };
-    }
-
-    if (type === FRAME_TYPE_FILE) {
-        const payloadView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-        const metaLen = payloadView.getUint16(0, true);
-        const metaBytes = payload.slice(2, 2 + metaLen);
-        const meta: FileMetadata = JSON.parse(new TextDecoder().decode(metaBytes));
-        const fileData = payload.slice(2 + metaLen).buffer;
-
-        return {
-            type: 'file',
-            fileName: meta.fileName,
-            fileType: meta.fileType,
-            fileData,
+        const header: FrameHeader = {
+            type: 'file-data',
+            fileId,
+            frameIndex: i,
+            totalFrames,
+            crc32: CRC32.buf(new Uint8Array(payload)),
         };
+
+        frames.push(createFrame(header, payload));
     }
 
-    throw new Error(`Unknown frame type: ${type}`);
+    return frames;
 }
 
+
 /**
- * Reassembly buffer for accumulating received quiet-js frames.
- * Quiet.js delivers small chunks (~20 bytes each); we accumulate them
- * until we have a complete envelope, then decode it.
+ * Parses a raw frame ArrayBuffer into its header and payload.
+ * Verifies the payload's integrity using the CRC32 checksum from the header.
+ * @param frame The raw frame to deframe.
+ * @returns An object containing the parsed header and the payload.
  */
-export class ReassemblyBuffer {
-    private chunks: Uint8Array[] = [];
-    private totalBytes = 0;
+export function deframe(frame: ArrayBuffer): { header: FrameHeader; payload: ArrayBuffer } {
+    const frameView = new Uint8Array(frame);
+    const headerLength = frameView[0];
+    const headerBuffer = frame.slice(1, 1 + headerLength);
+    const payload = frame.slice(1 + headerLength);
+
+    const headerString = new TextDecoder().decode(headerBuffer);
+    const header: FrameHeader = JSON.parse(headerString);
+
+    if (header.crc32) {
+        const payloadCrc = CRC32.buf(new Uint8Array(payload));
+        if (payloadCrc !== header.crc32) {
+            throw new Error('CRC32 mismatch');
+        }
+    }
+
+    return { header, payload };
+}
+
+
+const REASSEMBLY_TIMEOUT = 30000; // 30 seconds
+
+/**
+ * Manages the reassembly of chunks for a single file transfer.
+ */
+class FileReassembler {
+    private chunks: (ArrayBuffer | undefined)[];
+    private receivedChunks = 0;
+    public lastUpdated: number;
+
+    constructor(
+        public readonly fileId: string,
+        public readonly fileName: string,
+        public readonly fileType: string,
+        private readonly totalFrames: number
+    ) {
+        this.chunks = new Array(totalFrames);
+        this.lastUpdated = Date.now();
+    }
 
     /**
-     * Add a received chunk. Returns a decoded envelope if we now have
-     * a complete message, or null if more data is needed.
+     * Adds a chunk to the reassembly buffer.
+     * @param frameIndex The index of the chunk.
+     * @param payload The chunk's data.
      */
-    addChunk(chunk: ArrayBuffer): DecodedEnvelope | null {
-        const bytes = new Uint8Array(chunk);
-        this.chunks.push(bytes);
-        this.totalBytes += bytes.length;
+    addChunk(frameIndex: number, payload: ArrayBuffer) {
+        if (!this.chunks[frameIndex]) {
+            this.chunks[frameIndex] = payload;
+            this.receivedChunks++;
+        }
+        this.lastUpdated = Date.now();
+    }
 
-        // Need at least the header to know the total length
-        if (this.totalBytes < ENVELOPE_HEADER_SIZE) {
+    /**
+     * Checks if all chunks for the file have been received.
+     * @returns True if the file is complete, false otherwise.
+     */
+    isComplete(): boolean {
+        return this.receivedChunks === this.totalFrames;
+    }
+
+    /**
+     * Reconstructs the file from the received chunks.
+     * @returns The reassembled File object.
+     * @throws If the file is not yet complete.
+     */
+    getFile(): File {
+        if (!this.isComplete()) {
+            throw new Error('File is not complete');
+        }
+        const fileBlob = new Blob(this.chunks as BlobPart[], { type: this.fileType });
+        return new File([fileBlob], this.fileName, { type: this.fileType });
+    }
+}
+
+/**
+ * Manages multiple concurrent file reassembly processes.
+ * Handles the creation and cleanup of `FileReassembler` instances.
+ */
+export class ReassemblyManager {
+    private reassemblers = new Map<string, FileReassembler>();
+    private cleanupInterval: number;
+
+    constructor() {
+        this.cleanupInterval = window.setInterval(() => this.cleanup(), REASSEMBLY_TIMEOUT);
+    }
+
+    /**
+     * Retrieves or creates a `FileReassembler` for a given transfer.
+     * @param header The header of the received frame.
+     * @returns The corresponding `FileReassembler`, or null if one cannot be created.
+     */
+    public getReassembler(header: FrameHeader): FileReassembler | null {
+        if (header.type === 'file-start' && header.fileId && header.fileName && header.fileType && header.totalFrames !== undefined) {
+            if (!this.reassemblers.has(header.fileId)) {
+                const reassembler = new FileReassembler(
+                    header.fileId,
+                    header.fileName,
+                    header.fileType,
+                    header.totalFrames
+                );
+                this.reassemblers.set(header.fileId, reassembler);
+            }
+            return this.reassemblers.get(header.fileId)!;
+        } else if (header.type === 'file-data' && header.fileId) {
+            return this.reassemblers.get(header.fileId) || null;
+        }
+        return null;
+    }
+
+    /**
+     * Processes an incoming frame, adding its payload to the correct reassembler.
+     * @param header The header of the received frame.
+     * @param payload The payload of the received frame.
+     * @returns The reassembled `File` if the transfer is complete, otherwise `null`.
+     */
+    public processFrame(header: FrameHeader, payload: ArrayBuffer): File | null {
+        const reassembler = this.getReassembler(header);
+        if (!reassembler || header.frameIndex === undefined) {
             return null;
         }
 
-        // Merge chunks to read the header
-        const merged = this.merge();
-        const view = new DataView(merged.buffer, merged.byteOffset, merged.byteLength);
-        const totalLen = view.getUint32(1, true);
+        reassembler.addChunk(header.frameIndex, payload);
 
-        if (this.totalBytes < totalLen) {
-            return null; // Need more data
+        if (reassembler.isComplete()) {
+            const file = reassembler.getFile();
+            this.reassemblers.delete(reassembler.fileId);
+            return file;
         }
 
-        // We have enough data — decode it
-        const result = decodeEnvelope(merged.buffer as ArrayBuffer);
-        this.reset();
-        return result;
-    }
-
-    private merge(): Uint8Array {
-        const merged = new Uint8Array(this.totalBytes);
-        let offset = 0;
-        for (const chunk of this.chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
-        }
-        return merged;
-    }
-
-    reset() {
-        this.chunks = [];
-        this.totalBytes = 0;
-    }
-
-    get bytesReceived(): number {
-        return this.totalBytes;
+        return null;
     }
 
     /**
-     * Get expected total length from the header, or 0 if header not yet received.
+     * Periodically cleans up stale `FileReassembler` instances to prevent memory leaks.
      */
-    get expectedLength(): number {
-        if (this.totalBytes < ENVELOPE_HEADER_SIZE) return 0;
-        const merged = this.merge();
-        const view = new DataView(merged.buffer, merged.byteOffset, merged.byteLength);
-        return view.getUint32(1, true);
+    private cleanup() {
+        const now = Date.now();
+        for (const [fileId, reassembler] of this.reassemblers.entries()) {
+            if (now - reassembler.lastUpdated >= REASSEMBLY_TIMEOUT) {
+                console.log(`Timing out reassembly for fileId: ${fileId}`);
+                this.reassemblers.delete(fileId);
+            }
+        }
+    }
+
+    /**
+     * Stops the cleanup interval and clears all active reassemblers.
+     */
+    public destroy() {
+        clearInterval(this.cleanupInterval);
+        this.reassemblers.clear();
     }
 }

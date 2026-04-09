@@ -154,7 +154,7 @@ export function deframe(frame: ArrayBuffer): { header: FrameHeader; payload: Arr
     const headerString = new TextDecoder().decode(headerBuffer);
     const header: FrameHeader = JSON.parse(headerString);
 
-    if (header.crc32) {
+    if (header.crc32 !== undefined) {
         const payloadCrc = CRC32.buf(new Uint8Array(payload));
         if (payloadCrc !== header.crc32) {
             throw new Error('CRC32 mismatch');

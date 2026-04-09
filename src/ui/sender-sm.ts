@@ -37,7 +37,7 @@ export class SenderSM {
      * Starts the file transfer process.
      */
     public start() {
-        this.fileId = `${this.file.name}-${Date.now()}`;
+        this.fileId = crypto.randomUUID();
         this.setState('sending', 'Preparing to send...');
         this.file.arrayBuffer().then(fileBuffer => {
             this.frames = createFileDataFrames(fileBuffer, this.fileId);
@@ -121,7 +121,7 @@ export class SenderSM {
     private sendNextDataFrame() {
         this.setState('sending', `Sending frame ${this.currentFrameIndex + 1}/${this.frames.length}...`);
         this.sendFrame(this.frames[this.currentFrameIndex]);
-        this.state = 'waiting-for-ack-data'; // Set state directly without a UI message
+        this.setState('waiting-for-ack-data', `Waiting for ACK on frame ${this.currentFrameIndex + 1}...`);
         this.ackTimeout = setTimeout(() => this.onAckTimeout('data'), ACK_TIMEOUT);
     }
 

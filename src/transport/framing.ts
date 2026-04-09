@@ -2,6 +2,8 @@ import CRC32 from 'crc-32';
 
 /**
  * The size of the payload for each data frame, in bytes.
+ * 512 bytes balances frame overhead against Quiet.js's internal PHY frame size
+ * (~20-25 bytes), keeping reassembly manageable while not over-fragmenting data.
  */
 const PAYLOAD_SIZE = 512;
 
@@ -45,7 +47,7 @@ function createFrame(header: FrameHeader, payload?: ArrayBuffer): ArrayBuffer {
     const headerString = JSON.stringify(header);
     const headerBuffer = new TextEncoder().encode(headerString);
     if (headerBuffer.length > 255) {
-        throw new Error('Header is too large for a 1-byte length prefix!');
+        throw new Error(`Header is too large (${headerBuffer.length} bytes) for a 1-byte length prefix (max 255 bytes)`);
     }
 
     const payloadLength = payload ? payload.byteLength : 0;
@@ -227,7 +229,7 @@ export class ReassemblyManager {
     private cleanupInterval: number;
 
     constructor() {
-        this.cleanupInterval = window.setInterval(() => this.cleanup(), REASSEMBLY_TIMEOUT);
+        this.cleanupInterval = setInterval(() => this.cleanup(), REASSEMBLY_TIMEOUT) as unknown as number;
     }
 
     /**

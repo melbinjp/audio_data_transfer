@@ -1,4 +1,3 @@
-let isQuietInitialized = false;
 let initPromise: Promise<void> | null = null;
 
 /**
@@ -32,7 +31,6 @@ function doInit(): Promise<void> {
             memoryInitializerPrefix: base,
             libfecPrefix: base,
             onReady: () => {
-                isQuietInitialized = true;
                 console.log("Quiet.js initialized successfully.");
                 resolve();
             },

@@ -1,6 +1,7 @@
 {
   "name": "audio-data-transfer",
   "version": "1.0.0",
+  "type": "module",
   "description": "A web-based application to transmit arbitrary data between devices using audio.",
   "scripts": {
     "dev": "vite",

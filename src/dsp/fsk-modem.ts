@@ -504,6 +504,12 @@ export async function startListening(
 
             case 'SYNC':
                 if (!validTone) { resetState(); break; }
+                // Drain any trailing preamble-tone symbols that arrive after the
+                // state machine transitions to SYNC (which happens after
+                // PREAMBLE_MIN_SYMBOLS, while the transmitter is still sending
+                // all PREAMBLE_SYMBOLS).  Only start accumulating sync-byte
+                // symbols once we see a non-preamble tone.
+                if (toneIndex === preambleTone && symbolAccum.length === 0) { break; }
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const syncByte = flushByte();

@@ -67,7 +67,7 @@ export const DATA_MODEM_PROFILE = 'audible-fsk-robust';
  *
  * 'audible-fsk' uses the same FSK8/v29 modem as DATA_MODEM_PROFILE but with
  * only 50 samples/symbol (vs 250), reducing the Kaiser-filter tap-count from
- * 3 250 to 650.  This cuts the per-audio-buffer Emscripten DSP cost by ~5×,
+ * 3,250 to 650.  This cuts the per-audio-buffer Emscripten DSP cost by ~5×,
  * keeping the main thread responsive while the sender is simultaneously
  * transmitting data and listening for ACKs.  ACKs are small and benefit from
  * the app-level retry logic, so the slightly reduced noise immunity is fine.

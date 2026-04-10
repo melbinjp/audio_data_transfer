@@ -124,29 +124,58 @@ export function createAckStartFrame(fileId: string): ArrayBuffer {
 }
 
 /**
+ * Creates a single `file-data` frame for the given chunk index.
+ * Prefer this over {@link createFileDataFrames} when iterating over a large
+ * file: it avoids holding the entire set of pre-built frames in memory
+ * simultaneously (which would double peak memory usage).
+ *
+ * @param fileBuffer The full file content as an ArrayBuffer.
+ * @param fileId The ID for this transfer session.
+ * @param frameIndex The zero-based index of the frame to create.
+ * @param totalFrames The total number of data frames for this file.
+ * @returns An ArrayBuffer representing the single `file-data` frame.
+ */
+export function createFileDataFrame(
+    fileBuffer: ArrayBuffer,
+    fileId: string,
+    frameIndex: number,
+    totalFrames: number,
+): ArrayBuffer {
+    const start = frameIndex * PAYLOAD_SIZE;
+    const end = start + PAYLOAD_SIZE;
+    const payload = fileBuffer.slice(start, end);
+
+    const header: FrameHeader = {
+        type: 'file-data',
+        fileId,
+        frameIndex,
+        totalFrames,
+        crc32: CRC32.buf(new Uint8Array(payload)),
+    };
+
+    return createFrame(header, payload);
+}
+
+/**
+ * Returns the total number of `file-data` frames required for a given buffer.
+ * @param fileBuffer The file content as an ArrayBuffer.
+ */
+export function getTotalFrames(fileBuffer: ArrayBuffer): number {
+    return Math.ceil(fileBuffer.byteLength / PAYLOAD_SIZE);
+}
+
+/**
  * Chunks a file buffer into an array of `file-data` frames.
  * @param fileBuffer The file content as an ArrayBuffer.
  * @param fileId The ID for this transfer session.
  * @returns An array of `file-data` frames.
  */
 export function createFileDataFrames(fileBuffer: ArrayBuffer, fileId: string): ArrayBuffer[] {
-    const totalFrames = Math.ceil(fileBuffer.byteLength / PAYLOAD_SIZE);
+    const totalFrames = getTotalFrames(fileBuffer);
     const frames: ArrayBuffer[] = [];
 
     for (let i = 0; i < totalFrames; i++) {
-        const start = i * PAYLOAD_SIZE;
-        const end = start + PAYLOAD_SIZE;
-        const payload = fileBuffer.slice(start, end);
-
-        const header: FrameHeader = {
-            type: 'file-data',
-            fileId,
-            frameIndex: i,
-            totalFrames,
-            crc32: CRC32.buf(new Uint8Array(payload)),
-        };
-
-        frames.push(createFrame(header, payload));
+        frames.push(createFileDataFrame(fileBuffer, fileId, i, totalFrames));
     }
 
     return frames;

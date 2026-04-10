@@ -1,5 +1,5 @@
 import { sendData } from '../dsp/quiet-modem';
-import { createFileDataFrames, createFileStartFrame } from '../transport/framing';
+import { createFileDataFrame, createFileStartFrame, getTotalFrames } from '../transport/framing';
 
 /**
  * Defines the possible states of the sender state machine.
@@ -52,8 +52,8 @@ export class SenderSM {
     }
 
     private async sendAll(fileBuffer: ArrayBuffer) {
-        const frames = createFileDataFrames(fileBuffer, this.fileId);
-        this.onProgress(0, frames.length);
+        const totalFrames = getTotalFrames(fileBuffer);
+        this.onProgress(0, totalFrames);
 
         // Transmit the handshake frame first so the receiver can prepare its
         // reassembly buffer before any data frames arrive.
@@ -67,19 +67,23 @@ export class SenderSM {
             return;
         }
 
-        // Send every data frame in order.  await ensures each frame's audio
-        // has fully played out before the next one begins, preventing the
-        // quiet.js transmit queue from growing unboundedly.
-        for (let i = 0; i < frames.length; i++) {
-            this.setState('sending', `Sending frame ${i + 1}/${frames.length}...`);
+        // Send every data frame in order.  Frames are created one at a time so
+        // that only the current frame is held in memory alongside fileBuffer,
+        // rather than pre-allocating the full set (which would double peak RAM
+        // usage and cause out-of-memory crashes for large files).
+        // await ensures each frame's audio has fully played out before the next
+        // one begins, preventing the quiet.js transmit queue from growing unboundedly.
+        for (let i = 0; i < totalFrames; i++) {
+            this.setState('sending', `Sending frame ${i + 1}/${totalFrames}...`);
+            const frame = createFileDataFrame(fileBuffer, this.fileId, i, totalFrames);
             try {
-                await sendData(frames[i]);
+                await sendData(frame);
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 this.setState('error', `Transmission error: ${msg}`);
                 return;
             }
-            this.onProgress(i + 1, frames.length);
+            this.onProgress(i + 1, totalFrames);
         }
 
         this.setState('complete', 'File sent successfully.');

@@ -1,4 +1,4 @@
-import { startListening, primeAudio } from '../dsp/quiet-modem';
+import { startListening, primeAudio } from '../dsp/fsk-modem';
 import { deframe, ReassemblyManager } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 

@@ -62,11 +62,10 @@ export function initializeReceiver() {
                 try {
                     await ackSession.init();
                     await ackSession.send(ackFrame);
-                    ackSession.destroy();
                 } catch (err) {
                     console.error('Receiver: ACK transmission error:', err);
-                    ackSession.destroy();
                 } finally {
+                    ackSession.destroy();
                     isSendingAck = false;
                 }
             })();

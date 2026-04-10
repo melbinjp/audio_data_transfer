@@ -154,7 +154,7 @@ export class SenderSM {
                 ackStartReceived = await waitForAck('ack-start', -1);
             }
             if (!ackStartReceived) {
-                this.setState('error', 'No acknowledgement from receiver. Is the receiver listening?');
+                this.setState('error', 'No acknowledgment from receiver. Is the receiver listening?');
                 return;
             }
 

@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { initializeReceiver } from './receiver';
-import { createFileStartFrame, createFileDataFrames, deframe } from '../transport/framing';
-import { sendData, startListening } from '../dsp/quiet-modem';
+import { createFileStartFrame, createFileDataFrames } from '../transport/framing';
+import { startListening } from '../dsp/quiet-modem';
 
 // Mock the dsp module so no real audio/Quiet.js is needed
 vi.mock('../dsp/quiet-modem');
 vi.mock('./spectrogram');
 
 describe('Receiver UI', () => {
-    let onFrameCallback: (frame: ArrayBuffer) => Promise<void>;
+    let onFrameCallback: (frame: ArrayBuffer) => void;
 
     beforeEach(() => {
         // Set up a minimal DOM for the receiver
@@ -21,10 +21,9 @@ describe('Receiver UI', () => {
         `;
 
         vi.mocked(startListening).mockImplementation(async (cb) => {
-            onFrameCallback = cb as (frame: ArrayBuffer) => Promise<void>;
-            return { analyser: {} as AnalyserNode };
+            onFrameCallback = cb as (frame: ArrayBuffer) => void;
+            return { analyser: {} as AnalyserNode, stop: vi.fn() };
         });
-        vi.mocked(sendData).mockResolvedValue(undefined);
         URL.createObjectURL = vi.fn().mockReturnValue('blob:mock');
     });
 
@@ -32,7 +31,7 @@ describe('Receiver UI', () => {
         vi.clearAllMocks();
     });
 
-    it('should send ack-start when receiving a file-start frame', async () => {
+    it('should update status when receiving a file-start frame', async () => {
         initializeReceiver();
         const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
         receiveButton.click();
@@ -43,15 +42,13 @@ describe('Receiver UI', () => {
         const file = new File(['test'], 'test.txt', { type: 'text/plain' });
         const startFrame = createFileStartFrame(file, 'test-file-id');
 
-        await onFrameCallback(startFrame);
+        onFrameCallback(startFrame);
 
-        expect(sendData).toHaveBeenCalledOnce();
-        const sentFrame = vi.mocked(sendData).mock.calls[0][0];
-        const { header } = deframe(sentFrame);
-        expect(header.type).toBe('ack-start');
+        const statusEl = document.getElementById('receiver-status') as HTMLSpanElement;
+        expect(statusEl.textContent).toBe('Receiving file: test.txt');
     });
 
-    it('should send ack per data frame and show download link when complete', async () => {
+    it('should show download link when all frames received', async () => {
         initializeReceiver();
         const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
         receiveButton.click();
@@ -62,24 +59,16 @@ describe('Receiver UI', () => {
         const fileContent = 'hello world';
         const file = new File([fileContent], 'test.txt', { type: 'text/plain' });
 
-        // 1. Send file-start — receiver should ACK with ack-start
+        // 1. Deliver file-start frame
         const startFrame = createFileStartFrame(file, fileId);
-        await onFrameCallback(startFrame);
-        expect(sendData).toHaveBeenCalledOnce();
-        const { header: ackStartHeader } = deframe(vi.mocked(sendData).mock.calls[0][0]);
-        expect(ackStartHeader.type).toBe('ack-start');
+        onFrameCallback(startFrame);
 
-        // 2. Send data frames — receiver should ACK each one
+        // 2. Deliver all data frames
         const fileBuffer = await file.arrayBuffer();
         const dataFrames = createFileDataFrames(fileBuffer, fileId);
 
-        for (let i = 0; i < dataFrames.length; i++) {
-            vi.mocked(sendData).mockClear();
-            await onFrameCallback(dataFrames[i]);
-            expect(sendData).toHaveBeenCalledOnce();
-            const { header: ackHeader } = deframe(vi.mocked(sendData).mock.calls[0][0]);
-            expect(ackHeader.type).toBe('ack');
-            expect(ackHeader.frameIndex).toBe(i);
+        for (const frame of dataFrames) {
+            onFrameCallback(frame);
         }
 
         // 3. Verify download link appears after all frames received

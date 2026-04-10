@@ -1,27 +1,25 @@
-import { sendData, startListening, ACK_MODEM_PROFILE } from '../dsp/quiet-modem';
-import { createFileDataFrames, createFileStartFrame, deframe, FrameHeader } from '../transport/framing';
-
-const RETRY_LIMIT = 10;
-const ACK_TIMEOUT = 10000; // 10 seconds
+import { sendData } from '../dsp/quiet-modem';
+import { createFileDataFrames, createFileStartFrame } from '../transport/framing';
 
 /**
  * Defines the possible states of the sender state machine.
  */
-export type SenderState = 'idle' | 'waiting-for-ack-start' | 'sending' | 'waiting-for-ack-data' | 'complete' | 'error';
+export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
 
 /**
- * Manages the state and logic for sending a file, including the handshake,
- * data transmission, and ACK handling with retries.
+ * Sends a file as audio frames sequentially without requiring ACKs.
+ *
+ * Removing the bidirectional ACK protocol means the sender no longer needs
+ * to run a microphone receiver (ScriptProcessorNode) concurrently with the
+ * transmitter (another ScriptProcessorNode).  Having two ScriptProcessorNodes
+ * simultaneously was the primary cause of the main-thread freeze and the
+ * out-of-memory crash: quiet.js runs Emscripten DSP synchronously inside each
+ * node's onaudioprocess callback, and two concurrent nodes starved the browser.
  */
 export class SenderSM {
     private state: SenderState = 'idle';
     /** The unique ID for the current file transfer. Made public for testing. */
     public fileId = '';
-    private frames: ArrayBuffer[] = [];
-    private currentFrameIndex = 0;
-    private retryCount = 0;
-    private ackTimeout: ReturnType<typeof setTimeout> | null = null;
-    private stopAckListener: (() => void) | null = null;
 
     /**
      * @param file The file to be sent.
@@ -40,16 +38,7 @@ export class SenderSM {
     public start() {
         this.fileId = crypto.randomUUID();
         this.setState('sending', 'Preparing to send...');
-        this.file.arrayBuffer().then(async fileBuffer => {
-            this.frames = createFileDataFrames(fileBuffer, this.fileId);
-            this.onProgress(0, this.frames.length);
-            // Wait for the ACK listener to be fully initialised (microphone
-            // permission granted, Quiet receiver created) before transmitting
-            // the first frame.  Without this await, the first ACK could arrive
-            // before the listener is ready and would be silently missed.
-            await this.startAckListener();
-            this.sendStartFrame();
-        }).catch(err => {
+        this.file.arrayBuffer().then(fileBuffer => this.sendAll(fileBuffer)).catch(err => {
             const msg = err instanceof Error ? err.message : String(err);
             this.setState('error', `Failed to read file: ${msg}`);
         });
@@ -60,101 +49,39 @@ export class SenderSM {
         if (message) {
             this.onStateChange(newState, message);
         }
-        if (newState === 'complete' || newState === 'error') {
-            this.stopAckListener?.();
-            this.stopAckListener = null;
-        }
     }
 
-    private async sendFrame(frame: ArrayBuffer) {
+    private async sendAll(fileBuffer: ArrayBuffer) {
+        const frames = createFileDataFrames(fileBuffer, this.fileId);
+        this.onProgress(0, frames.length);
+
+        // Transmit the handshake frame first so the receiver can prepare its
+        // reassembly buffer before any data frames arrive.
+        const startFrame = createFileStartFrame(this.file, this.fileId);
+        this.setState('sending', 'Sending handshake frame...');
         try {
-            await sendData(frame);
+            await sendData(startFrame);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.setState('error', `Transmission error: ${msg}`);
-        }
-    }
-
-    private startAckListener(): Promise<void> {
-        return startListening(frame => {
-            try {
-                const { header } = deframe(frame);
-                if (header.fileId !== this.fileId) return; // Ignore frames for other transfers
-
-                if (this.ackTimeout) {
-                    clearTimeout(this.ackTimeout);
-                    this.ackTimeout = null;
-                }
-
-                if (this.state === 'waiting-for-ack-start' && header.type === 'ack-start') {
-                    this.handleAckStart();
-                } else if (this.state === 'waiting-for-ack-data' && header.type === 'ack') {
-                    this.handleAckData(header);
-                }
-            } catch (_err) {
-                // Ignore frames that can't be deframed (may be noise)
-            }
-        }, ACK_MODEM_PROFILE).then(({ stop }) => {
-            this.stopAckListener = stop;
-            console.log('Sender ACK listener ready.');
-        }).catch(err => {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.setState('error', `Listener error: ${msg}`);
-            throw err;
-        });
-    }
-
-    private handleAckStart() {
-        this.setState('sending', 'Handshake complete. Sending data...');
-        this.currentFrameIndex = 0;
-        this.retryCount = 0;
-        this.sendNextDataFrame();
-    }
-
-    private handleAckData(header: FrameHeader) {
-        if (header.frameIndex === this.currentFrameIndex) {
-            this.currentFrameIndex++;
-            this.retryCount = 0;
-            this.onProgress(this.currentFrameIndex, this.frames.length);
-            if (this.currentFrameIndex < this.frames.length) {
-                this.sendNextDataFrame();
-            } else {
-                this.setState('complete', 'File sending complete.');
-            }
-        }
-    }
-
-    private async sendStartFrame() {
-        const startFrame = createFileStartFrame(this.file, this.fileId);
-        this.setState('sending', 'Sending handshake frame...');
-        // Await the full playback of the frame so the ACK timeout only begins
-        // once the receiver has actually heard the entire transmission.
-        await this.sendFrame(startFrame);
-        this.setState('waiting-for-ack-start', 'Waiting for handshake ACK...');
-        this.ackTimeout = setTimeout(() => this.onAckTimeout('start'), ACK_TIMEOUT);
-    }
-
-    private async sendNextDataFrame() {
-        this.setState('sending', `Sending frame ${this.currentFrameIndex + 1}/${this.frames.length}...`);
-        // Await full playback before starting the ACK timer.
-        await this.sendFrame(this.frames[this.currentFrameIndex]);
-        this.setState('waiting-for-ack-data', `Waiting for ACK on frame ${this.currentFrameIndex + 1}...`);
-        this.ackTimeout = setTimeout(() => this.onAckTimeout('data'), ACK_TIMEOUT);
-    }
-
-    private onAckTimeout(phase: 'start' | 'data') {
-        this.ackTimeout = null;
-        this.retryCount++;
-        if (this.retryCount > RETRY_LIMIT) {
-            this.setState('error', 'Transfer failed: Too many retries.');
             return;
         }
 
-        this.setState('sending', `Timeout, retrying... (${this.retryCount}/${RETRY_LIMIT})`);
-        if (phase === 'start') {
-            this.sendStartFrame();
-        } else {
-            this.sendNextDataFrame();
+        // Send every data frame in order.  await ensures each frame's audio
+        // has fully played out before the next one begins, preventing the
+        // quiet.js transmit queue from growing unboundedly.
+        for (let i = 0; i < frames.length; i++) {
+            this.setState('sending', `Sending frame ${i + 1}/${frames.length}...`);
+            try {
+                await sendData(frames[i]);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.setState('error', `Transmission error: ${msg}`);
+                return;
+            }
+            this.onProgress(i + 1, frames.length);
         }
+
+        this.setState('complete', 'File sent successfully.');
     }
 }

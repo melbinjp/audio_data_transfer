@@ -2,12 +2,16 @@ import CRC32 from 'crc-32';
 
 /**
  * The size of the payload for each data frame, in bytes.
- * Kept small so each application frame maps to a small number of PHY-layer
- * acoustic frames (~20-25 bytes each). Fewer acoustic frames per application
- * frame means faster round-trips and a higher probability that every acoustic
- * frame is received before the ACK timeout expires.
+ * Larger payloads mean fewer frames and fewer round-trips, which reduces
+ * memory pressure and the number of audio-buffer callbacks on the main thread.
+ * quiet.js internally slices each transmit() call into 20-byte acoustic PHY
+ * frames with FEC, so any application-level payload size works — however
+ * values much above ~64 KB risk hitting Emscripten's encoder queue limit, and
+ * very small values (< 20) produce excessive framing overhead.  4096 bytes
+ * balances memory efficiency with frame-count reduction (~64× fewer frames
+ * compared to the previous 64-byte size).
  */
-const PAYLOAD_SIZE = 64;
+const PAYLOAD_SIZE = 4096;
 
 /**
  * Defines the different types of frames used in the protocol.

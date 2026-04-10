@@ -1,10 +1,19 @@
-import { sendData, startListening, primeAudio, ACK_MODEM_PROFILE } from '../dsp/quiet-modem';
-import { createAckFrame, createAckStartFrame, deframe, ReassemblyManager } from '../transport/framing';
+import { startListening, primeAudio } from '../dsp/quiet-modem';
+import { deframe, ReassemblyManager } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
 /**
  * Initializes the receiver UI, wiring up the receive button and handling
- * the logic for receiving frames, sending ACKs, and reassembling the file.
+ * the logic for receiving frames and reassembling the file.
+ *
+ * ACK sending has been intentionally removed.  Sending an ACK required running
+ * a Quiet.js transmitter (ScriptProcessorNode) concurrently with the active
+ * data receiver (another ScriptProcessorNode).  Both nodes run heavy Emscripten
+ * DSP synchronously on the main thread via the deprecated onaudioprocess
+ * callback, and their combined CPU load caused the main thread to freeze and
+ * the browser tab to crash with an out-of-memory error.  One-way transmission
+ * (sender → receiver, no ACKs) keeps only a single ScriptProcessorNode active
+ * at any time, allowing the browser to stay responsive.
  */
 export function initializeReceiver() {
     const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
@@ -40,7 +49,7 @@ export function initializeReceiver() {
         reassemblyManager = new ReassemblyManager();
 
         try {
-            const { analyser, stop } = await startListening(async (frame) => {
+            const { analyser, stop } = await startListening((frame) => {
                 try {
                     const { header, payload } = deframe(frame);
 
@@ -48,15 +57,12 @@ export function initializeReceiver() {
                         case 'file-start': {
                             reassemblyManager!.getReassembler(header);
                             statusEl.textContent = `Receiving file: ${header.fileName}`;
-                            await sendData(createAckStartFrame(header.fileId), ACK_MODEM_PROFILE);
                             break;
                         }
                         case 'file-data': {
                             statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${header.totalFrames}`;
                             receiveProgress.max = header.totalFrames!;
                             receiveProgress.value = header.frameIndex! + 1;
-
-                            await sendData(createAckFrame(header.fileId, header.frameIndex!), ACK_MODEM_PROFILE);
 
                             const file = reassemblyManager!.processFrame(header, payload);
                             if (file) {

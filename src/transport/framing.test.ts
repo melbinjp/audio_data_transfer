@@ -27,9 +27,11 @@ describe('framing', () => {
         const frame = frames[0];
         const frameView = new Uint8Array(frame);
 
-        const headerLength = frameView[0];
-        const headerBuffer = frame.slice(1, 1 + headerLength);
-        const payload = frame.slice(1 + headerLength);
+        // Bytes 0-1 are the 2-byte big-endian total-content-length prefix.
+        // Byte 2 is the header length.
+        const headerLength = frameView[2];
+        const headerBuffer = frame.slice(3, 3 + headerLength);
+        const payload = frame.slice(3 + headerLength);
 
         const headerString = new TextDecoder().decode(headerBuffer);
         const header: FrameHeader = JSON.parse(headerString);
@@ -89,8 +91,9 @@ describe('framing', () => {
 
         // Tamper with the payload
         const tamperedFrame = new Uint8Array(frame.slice(0)); // Create a copy
-        const headerLength = tamperedFrame[0];
-        const payloadStartIndex = 1 + headerLength;
+        // Bytes 0-1 are the length prefix, byte 2 is header_length.
+        const headerLength = tamperedFrame[2];
+        const payloadStartIndex = 3 + headerLength;
         tamperedFrame[payloadStartIndex]++; // Change the first byte of the payload
 
         expect(() => deframe(tamperedFrame.buffer)).toThrow('CRC32 mismatch');

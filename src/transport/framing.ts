@@ -2,10 +2,12 @@ import CRC32 from 'crc-32';
 
 /**
  * The size of the payload for each data frame, in bytes.
- * 512 bytes balances frame overhead against Quiet.js's internal PHY frame size
- * (~20-25 bytes), keeping reassembly manageable while not over-fragmenting data.
+ * Kept small so each application frame maps to a small number of PHY-layer
+ * acoustic frames (~20-25 bytes each). Fewer acoustic frames per application
+ * frame means faster round-trips and a higher probability that every acoustic
+ * frame is received before the ACK timeout expires.
  */
-const PAYLOAD_SIZE = 512;
+const PAYLOAD_SIZE = 64;
 
 /**
  * Defines the different types of frames used in the protocol.
@@ -38,7 +40,10 @@ export interface FrameHeader {
 
 /**
  * Creates a frame by combining a header and an optional payload into a single ArrayBuffer.
- * The frame format is `[header_length (1 byte)] [json_header] [payload]`.
+ * The frame format is `[total_content_length (2 bytes, big-endian)] [header_length (1 byte)] [json_header] [payload]`.
+ * The 2-byte length prefix allows a stream buffer to know exactly how many bytes
+ * make up one complete application frame, which is necessary because quiet.js
+ * delivers data via `onReceive` in small PHY-layer chunks (not one full frame at a time).
  * @param header The frame header object.
  * @param payload An optional payload as an ArrayBuffer.
  * @returns The combined frame as an ArrayBuffer.
@@ -51,13 +56,18 @@ function createFrame(header: FrameHeader, payload?: ArrayBuffer): ArrayBuffer {
     }
 
     const payloadLength = payload ? payload.byteLength : 0;
-    const frame = new ArrayBuffer(1 + headerBuffer.length + payloadLength);
+    // content = [header_len (1)] [header] [payload]
+    const contentLength = 1 + headerBuffer.length + payloadLength;
+    // frame = [total_content_length (2)] [content]
+    const frame = new ArrayBuffer(2 + contentLength);
     const frameView = new Uint8Array(frame);
 
-    frameView[0] = headerBuffer.length;
-    frameView.set(headerBuffer, 1);
+    frameView[0] = (contentLength >> 8) & 0xff;
+    frameView[1] = contentLength & 0xff;
+    frameView[2] = headerBuffer.length;
+    frameView.set(headerBuffer, 3);
     if (payload) {
-        frameView.set(new Uint8Array(payload), 1 + headerBuffer.length);
+        frameView.set(new Uint8Array(payload), 3 + headerBuffer.length);
     }
 
     return frame;
@@ -141,15 +151,18 @@ export function createFileDataFrames(fileBuffer: ArrayBuffer, fileId: string): A
 
 /**
  * Parses a raw frame ArrayBuffer into its header and payload.
+ * Expects the full frame format produced by `createFrame`:
+ * `[total_content_length (2 bytes, big-endian)] [header_length (1 byte)] [json_header] [payload]`.
  * Verifies the payload's integrity using the CRC32 checksum from the header.
  * @param frame The raw frame to deframe.
  * @returns An object containing the parsed header and the payload.
  */
 export function deframe(frame: ArrayBuffer): { header: FrameHeader; payload: ArrayBuffer } {
     const frameView = new Uint8Array(frame);
-    const headerLength = frameView[0];
-    const headerBuffer = frame.slice(1, 1 + headerLength);
-    const payload = frame.slice(1 + headerLength);
+    // Skip the 2-byte total-content-length prefix; start reading content at offset 2.
+    const headerLength = frameView[2];
+    const headerBuffer = frame.slice(3, 3 + headerLength);
+    const payload = frame.slice(3 + headerLength);
 
     const headerString = new TextDecoder().decode(headerBuffer);
     const header: FrameHeader = JSON.parse(headerString);

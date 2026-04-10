@@ -1,6 +1,67 @@
 let initPromise: Promise<void> | null = null;
 
 /**
+ * Profile used for all transmit/receive operations.
+ *
+ * 'audible-fsk-robust' uses FSK8 modulation with a v29 convolutional outer FEC,
+ * centred at 8 kHz.  FSK is more tolerant of amplitude variations (different
+ * speaker/microphone gains) than GMSK, making it better suited for real-world
+ * device-to-device transfers across an air gap.
+ */
+const MODEM_PROFILE = 'audible-fsk-robust';
+
+/**
+ * Accumulates the raw byte stream delivered by quiet.js's per-acoustic-frame
+ * `onReceive` callbacks and emits complete application frames.
+ *
+ * quiet.js slices every `transmit(buf)` call into individual PHY-layer frames
+ * (~20–25 bytes each) and calls `onReceive` once per PHY frame.  Our
+ * application frames are much larger (header + payload), so we must reassemble
+ * them from the stream before handing them to higher-level protocol code.
+ *
+ * Frame wire format (produced by `createFrame` in framing.ts):
+ *   [total_content_length (2 bytes, big-endian)] [content…]
+ *
+ * The buffer resets itself automatically after extracting each complete frame,
+ * and can be cleared explicitly when the caller knows a transmission was
+ * interrupted (e.g. on a new listening session).
+ */
+class StreamBuffer {
+    private buf = new Uint8Array(0);
+
+    /** Append a new chunk (one acoustic frame) to the internal buffer. */
+    append(chunk: ArrayBuffer): void {
+        const incoming = new Uint8Array(chunk);
+        const next = new Uint8Array(this.buf.length + incoming.length);
+        next.set(this.buf);
+        next.set(incoming, this.buf.length);
+        this.buf = next;
+    }
+
+    /**
+     * Try to extract one complete application frame from the buffer.
+     * Returns the frame (including the 2-byte length prefix so `deframe`
+     * receives it in the expected format) or `null` if more bytes are needed.
+     */
+    tryExtract(): ArrayBuffer | null {
+        if (this.buf.length < 2) return null;
+        const contentLength = (this.buf[0] << 8) | this.buf[1];
+        const totalLength = 2 + contentLength;
+        if (this.buf.length < totalLength) return null;
+
+        // Slice out the complete frame and advance the buffer.
+        const frame = this.buf.slice(0, totalLength).buffer;
+        this.buf = this.buf.slice(totalLength);
+        return frame;
+    }
+
+    /** Discard all buffered bytes (call when starting a new listen session). */
+    clear(): void {
+        this.buf = new Uint8Array(0);
+    }
+}
+
+/**
  * Initialize the Quiet.js library.
  * 
  * IMPORTANT TIMING: Quiet.init() must be called BEFORE quiet-emscripten.js
@@ -70,7 +131,7 @@ export async function sendData(data: ArrayBuffer): Promise<void> {
     return new Promise((resolve, reject) => {
         try {
             const transmitter = Quiet.transmitter({
-                profile: 'audible',
+                profile: MODEM_PROFILE,
                 onFinish: () => {
                     console.log('Transmission finished.');
                     transmitter.destroy();
@@ -88,7 +149,13 @@ export async function sendData(data: ArrayBuffer): Promise<void> {
 /**
  * Start listening for audio data via the microphone.
  * Returns an AnalyserNode for spectrogram visualization.
- * The onData callback fires for each received frame from Quiet.
+ *
+ * Quiet.js delivers `onReceive` callbacks once per PHY-layer acoustic frame
+ * (~20–25 bytes).  Internally this function uses a `StreamBuffer` to
+ * accumulate those chunks and only invokes `onData` when a complete
+ * application frame (identified by the 2-byte length prefix written by
+ * `createFrame`) has been fully received.  Corrupted or partial frames are
+ * silently discarded so that the next retransmit starts with a clean buffer.
  */
 export async function startListening(onData: (data: ArrayBuffer) => void): Promise<{ analyser: AnalyserNode }> {
     await initQuiet();
@@ -105,20 +172,37 @@ export async function startListening(onData: (data: ArrayBuffer) => void): Promi
     const analyser = audioCtx.createAnalyser();
     source.connect(analyser);
 
+    const streamBuf = new StreamBuffer();
+
     // Create the Quiet receiver. It will call getUserMedia internally as well.
     // Both our analyser and Quiet's receiver will process the mic stream.
     Quiet.receiver({
-        profile: 'audible',
-        onReceive: (payload) => {
-            onData(payload);
+        profile: MODEM_PROFILE,
+        onReceive: (chunk: ArrayBuffer) => {
+            streamBuf.append(chunk);
+
+            // Drain all complete application frames from the buffer.
+            let frame: ArrayBuffer | null;
+            while ((frame = streamBuf.tryExtract()) !== null) {
+                try {
+                    onData(frame);
+                } catch (err) {
+                    // A bad frame (CRC mismatch, malformed JSON, etc.) must not
+                    // corrupt subsequent frames.  Log and continue draining.
+                    console.warn('StreamBuffer: discarding malformed application frame:', err);
+                }
+            }
         },
         onCreate: () => {
             console.log('Quiet receiver created and listening.');
+            // Clear any leftover bytes from a previous session so the first
+            // incoming transmission starts with a clean slate.
+            streamBuf.clear();
         },
-        onCreateFail: (reason) => {
+        onCreateFail: (reason: string) => {
             console.error('Failed to create receiver:', reason);
         },
-        onReceiveFail: (num_fails) => {
+        onReceiveFail: (num_fails: number) => {
             console.warn(`Receive checksum failures: ${num_fails}`);
         },
     });

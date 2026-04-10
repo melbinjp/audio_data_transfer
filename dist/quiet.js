@@ -377,6 +377,11 @@ var Quiet = (function() {
                 dummy_osc = audioCtx.createOscillator();
                 dummy_osc.type = 'square';
                 dummy_osc.frequency.value = 420;
+                // start() must be called so Chrome's audio engine considers this graph
+                // "active" and fires onaudioprocess on the ScriptProcessorNode.
+                // Without an active source node, Chrome silently skips processing
+                // the graph and onaudioprocess never fires.
+                dummy_osc.start();
 
             }
             dummy_osc.connect(transmitter);

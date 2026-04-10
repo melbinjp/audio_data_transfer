@@ -164,7 +164,13 @@ export async function startListening(onData: (data: ArrayBuffer) => void): Promi
     // Quiet.js creates its own internal AudioContext for the receiver,
     // so we run a parallel analyser on the raw mic stream for visualization.
     const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-    await audioCtx.resume();
+    // Fire-and-forget: don't await resume() here. When called from an async
+    // chain that is no longer within a synchronous user-gesture frame (e.g.
+    // the sender's startAckListener, which runs after await file.arrayBuffer()),
+    // Chrome's autoplay policy may keep the promise pending indefinitely,
+    // stalling the entire send flow at "Preparing to send".  The analyser
+    // will start providing data once the context resumes on its own.
+    audioCtx.resume().catch(err => console.warn('AudioContext resume warning:', err));
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const source = audioCtx.createMediaStreamSource(stream);

@@ -29,17 +29,43 @@
 export const SYMBOL_DURATION_MS = 5;
 
 /**
- * Goertzel frequency bins (k values) for the 4 FSK tones.
+ * Goertzel frequency bins (k values) for the 4 FSK tones of the DATA channel
+ * (sender → receiver).
  * Actual tone Hz = k × (1000 / SYMBOL_DURATION_MS) = k × 200.
  */
 export const K_VALUES = [2, 4, 6, 8] as const;
 
 /**
- * Tone index (into K_VALUES) used for the preamble.
+ * Tone index (into K_VALUES) used for the data-channel preamble.
  * Index 1 → k = 4 → ~800 Hz: above typical low-frequency ambient noise and
  * microphone roll-off, yet well within every consumer speaker's passband.
  */
 export const PREAMBLE_TONE = 1;
+
+/**
+ * Goertzel frequency bins (k values) for the ACK back-channel
+ * (receiver → sender).
+ *
+ * These bins are chosen to be completely non-overlapping with the data-channel
+ * tones (400–1600 Hz) while remaining within the passband of every consumer
+ * speaker and microphone (≤ ~8 kHz):
+ *
+ *   k = 11 → 11 × 200 = 2200 Hz
+ *   k = 13 → 13 × 200 = 2600 Hz
+ *   k = 15 → 15 × 200 = 3000 Hz
+ *   k = 17 → 17 × 200 = 3400 Hz
+ *
+ * Because the ACK listener on the sender side only looks for tones in this
+ * upper band, the sender's own outgoing data transmissions (400–1600 Hz)
+ * cannot be misinterpreted as incoming ACKs, eliminating self-reception errors.
+ */
+export const ACK_K_VALUES = [11, 13, 15, 17] as const;
+
+/**
+ * Preamble tone index into ACK_K_VALUES.
+ * Index 1 → k = 13 → 2600 Hz.
+ */
+export const ACK_PREAMBLE_TONE = 1;
 
 /** Number of preamble symbols prepended to every acoustic frame. */
 export const PREAMBLE_SYMBOLS = 16;

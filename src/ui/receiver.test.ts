@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { initializeReceiver } from './receiver';
 import { createFileStartFrame, createFileDataFrames } from '../transport/framing';
-import { startListening } from '../dsp/fsk-modem';
+import { startListening, TransmitterSession } from '../dsp/fsk-modem';
 
 // Mock the dsp module so no real audio/AudioWorklet is needed
 vi.mock('../dsp/fsk-modem');
@@ -24,6 +24,15 @@ describe('Receiver UI', () => {
             onFrameCallback = cb as (frame: ArrayBuffer) => void;
             return { analyser: {} as AnalyserNode, stop: vi.fn() };
         });
+
+        // TransmitterSession is used by the receiver to send ACKs.
+        // Mock it so that init() and send() return resolved Promises.
+        vi.mocked(TransmitterSession).mockImplementation(() => ({
+            init: vi.fn().mockResolvedValue(undefined),
+            send: vi.fn().mockResolvedValue(undefined),
+            destroy: vi.fn(),
+        }) as unknown as TransmitterSession);
+
         URL.createObjectURL = vi.fn().mockReturnValue('blob:mock');
     });
 

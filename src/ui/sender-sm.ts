@@ -110,7 +110,7 @@ export class SenderSM {
                     const { header } = deframe(rawFrame);
                     if (header.fileId !== this.fileId || !pendingWaiter) return;
                     const w = pendingWaiter;
-                    const frameMatches = w.frameIndex === -1 || header.frameIndex === w.frameIndex;
+                    const frameMatches = w.frameIndex === ANY_FRAME_INDEX || header.frameIndex === w.frameIndex;
                     if (header.type === w.type && frameMatches) {
                         clearTimeout(w.timer);
                         pendingWaiter = null;
@@ -128,19 +128,22 @@ export class SenderSM {
             return;
         }
 
+/** Sentinel value for waitForAck meaning "accept any frameIndex". */
+const ANY_FRAME_INDEX = -1;
+
         /**
          * Returns a Promise that resolves to `true` when the expected ACK
          * arrives, or `false` if ACK_TIMEOUT_MS elapses first.
-         * @param type      Expected frame type ('ack-start' or 'ack').
-         * @param frameIndex Expected frameIndex, or -1 to match any value.
+         * @param ackType       Expected frame type ('ack-start' or 'ack').
+         * @param frameIndex    Expected frameIndex, or ANY_FRAME_INDEX to match any value.
          */
-        const waitForAck = (type: string, frameIndex: number): Promise<boolean> =>
+        const waitForAck = (ackType: string, frameIndex: number): Promise<boolean> =>
             new Promise((resolve) => {
                 const timer = setTimeout(() => {
                     if (pendingWaiter?.resolve === resolve) pendingWaiter = null;
                     resolve(false);
                 }, ACK_TIMEOUT_MS);
-                pendingWaiter = { type, frameIndex, resolve, timer };
+                pendingWaiter = { type: ackType, frameIndex, resolve, timer };
             });
 
         try {
@@ -155,7 +158,7 @@ export class SenderSM {
                 );
                 const startFrame = createFileStartFrame(this.file, this.fileId);
                 await session.send(startFrame);
-                ackStartReceived = await waitForAck('ack-start', -1);
+                ackStartReceived = await waitForAck('ack-start', ANY_FRAME_INDEX);
             }
             if (!ackStartReceived) {
                 this.setState('error', 'No acknowledgment from receiver. Is the receiver listening?');

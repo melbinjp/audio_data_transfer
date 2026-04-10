@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { initializeReceiver } from './receiver';
 import { createFileStartFrame, createFileDataFrames } from '../transport/framing';
-import { startListening } from '../dsp/quiet-modem';
+import { startListening } from '../dsp/fsk-modem';
 
-// Mock the dsp module so no real audio/Quiet.js is needed
-vi.mock('../dsp/quiet-modem');
+// Mock the dsp module so no real audio/AudioWorklet is needed
+vi.mock('../dsp/fsk-modem');
 vi.mock('./spectrogram');
 
 describe('Receiver UI', () => {

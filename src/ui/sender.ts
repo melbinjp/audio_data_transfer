@@ -1,5 +1,5 @@
 import { SenderSM } from './sender-sm';
-import { primeAudio } from '../dsp/quiet-modem';
+import { primeAudio } from '../dsp/fsk-modem';
 
 /**
  * Initializes the sender UI, wiring up the file picker and send button

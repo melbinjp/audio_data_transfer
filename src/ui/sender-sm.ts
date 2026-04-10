@@ -1,4 +1,4 @@
-import { TransmitterSession } from '../dsp/quiet-modem';
+import { TransmitterSession } from '../dsp/fsk-modem';
 import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame } from '../transport/framing';
 
 /**

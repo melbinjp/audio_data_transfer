@@ -8,10 +8,12 @@ import CRC32 from 'crc-32';
  * frames with FEC, so any application-level payload size works — however
  * values much above ~64 KB risk hitting Emscripten's encoder queue limit, and
  * very small values (< 20) produce excessive framing overhead.  4096 bytes
- * balances memory efficiency with frame-count reduction (~64× fewer frames
- * compared to the previous 64-byte size).
+ * balances throughput efficiency with per-frame acoustic transmission time.
+ * At ~50 bytes/sec through the FSK modem each 256-byte payload takes roughly
+ * 7 seconds to transmit (including header overhead), which keeps the UI
+ * responsive while minimizing the header-to-payload ratio.
  */
-export const PAYLOAD_SIZE = 4096;
+export const PAYLOAD_SIZE = 256;
 
 /**
  * Defines the different types of frames used in the protocol.

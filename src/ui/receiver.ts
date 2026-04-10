@@ -1,4 +1,4 @@
-import { startListening, primeAudio, TransmitterSession } from '../dsp/fsk-modem';
+import { startListening, primeAudio, TransmitterSession, ACK_CHANNEL } from '../dsp/fsk-modem';
 import { deframe, ReassemblyManager, createAckFrame, createAckStartFrame } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
@@ -46,10 +46,14 @@ export function initializeReceiver() {
         }
         reassemblyManager = new ReassemblyManager();
 
-        // Per-session ACK sender.  A busy flag serialises ACK transmissions so
-        // that only one TransmitterSession is active at a time.  Frames arriving
-        // while an ACK is in flight are still processed — the sender will retry
-        // if the ACK is not received within its timeout window.
+        // Per-session ACK sender.  ACKs are transmitted on the ACK_CHANNEL
+        // (2200–3400 Hz), which is completely non-overlapping with the data
+        // channel (400–1600 Hz).  This means the sender's ACK listener will
+        // never trigger on its own outgoing data transmissions.
+        // A busy flag serialises ACK transmissions so that only one
+        // TransmitterSession is active at a time.  Frames arriving while an
+        // ACK is in flight are still processed — the sender will retry if the
+        // ACK is not received within its timeout window.
         let isSendingAck = false;
         function sendAck(ackFrame: ArrayBuffer): void {
             if (isSendingAck) {
@@ -58,7 +62,7 @@ export function initializeReceiver() {
             }
             isSendingAck = true;
             (async () => {
-                const ackSession = new TransmitterSession();
+                const ackSession = new TransmitterSession(ACK_CHANNEL);
                 try {
                     await ackSession.init();
                     await ackSession.send(ackFrame);

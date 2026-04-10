@@ -1,4 +1,4 @@
-import { TransmitterSession, startListening } from '../dsp/fsk-modem';
+import { TransmitterSession, startListening, ACK_CHANNEL } from '../dsp/fsk-modem';
 import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame, deframe } from '../transport/framing';
 
 /**
@@ -101,6 +101,10 @@ export class SenderSM {
         let pendingWaiter: AckWaiter | null = null;
 
         try {
+            // ACK listener is tuned to the ACK_CHANNEL (2200–3400 Hz).  Because
+            // this band does not overlap the data channel (400–1600 Hz), the
+            // sender's own outgoing transmissions will never be mistaken for
+            // incoming ACKs by the Goertzel detector.
             const { stop } = await startListening((rawFrame) => {
                 try {
                     const { header } = deframe(rawFrame);
@@ -115,7 +119,7 @@ export class SenderSM {
                 } catch {
                     // Ignore malformed or noise-induced frames.
                 }
-            });
+            }, ACK_CHANNEL);
             stopAckListener = stop;
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

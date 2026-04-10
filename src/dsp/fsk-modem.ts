@@ -44,7 +44,42 @@ import {
     GUARD_SYMBOLS,
     SILENCE_THRESHOLD,
     TONE_DOMINANCE_RATIO,
+    ACK_K_VALUES,
+    ACK_PREAMBLE_TONE,
 } from './modem-config';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Channel configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Describes the frequency characteristics of one logical modem channel.
+ * Both TX and RX use the same `ChannelConfig` so that they agree on which
+ * physical tones carry data and which tone is used as the preamble beacon.
+ */
+export interface ChannelConfig {
+    /** The four Goertzel k-values that define the four FSK tones for this channel. */
+    kValues: readonly number[];
+    /** Index into kValues for the preamble tone. */
+    preambleTone: number;
+}
+
+/** Data channel (sender → receiver): tones at 400, 800, 1200, 1600 Hz. */
+export const DATA_CHANNEL: ChannelConfig = {
+    kValues: Array.from(K_VALUES),
+    preambleTone: PREAMBLE_TONE,
+};
+
+/**
+ * ACK back-channel (receiver → sender): tones at 2200, 2600, 3000, 3400 Hz.
+ *
+ * Using a frequency band completely above the data channel ensures the sender's
+ * ACK listener cannot decode its own outgoing data transmissions as ACKs.
+ */
+export const ACK_CHANNEL: ChannelConfig = {
+    kValues: Array.from(ACK_K_VALUES),
+    preambleTone: ACK_PREAMBLE_TONE,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -61,18 +96,17 @@ function getSymbolSamples(sampleRate: number): number {
 
 /**
  * Synthesise one FSK symbol as a Float32Array of sine-wave samples.
- * For tone index i, k = K_VALUES[i]; the tone frequency is
- *   freq = k × sampleRate / symbolSamples  Hz.
- * Because k is an integer and symbolSamples = round(SYMBOL_DURATION_MS × sr),
- * exactly k full cycles fit in the window, eliminating spectral leakage.
+ * `kValue` is the integer Goertzel bin number; the tone frequency is
+ *   freq = kValue × sampleRate / symbolSamples  Hz.
+ * Because kValue is an integer and symbolSamples = round(SYMBOL_DURATION_MS × sr),
+ * exactly kValue full cycles fit in the window, eliminating spectral leakage.
  */
 function synthesiseTone(
-    toneIndex: number,
+    kValue: number,
     symbolSamples: number,
     sampleRate: number,
 ): Float32Array {
-    const k = K_VALUES[toneIndex];
-    const freq = (k * sampleRate) / symbolSamples;
+    const freq = (kValue * sampleRate) / symbolSamples;
     const out = new Float32Array(symbolSamples);
     const twoPiFreqOverSr = (2 * Math.PI * freq) / sampleRate;
     for (let i = 0; i < symbolSamples; i++) {
@@ -89,16 +123,21 @@ function byteToSymbols(b: number): [number, number, number, number] {
 /**
  * Encode a complete application-layer frame (ArrayBuffer) into a Float32Array
  * of PCM audio samples ready for AudioBufferSourceNode playback.
+ *
+ * @param channel  Which frequency channel to encode for (data or ACK).
+ *                 Defaults to DATA_CHANNEL so existing callers are unaffected.
  */
 function encodeFrameToAudio(
     frame: ArrayBuffer,
     symbolSamples: number,
     sampleRate: number,
+    channel: ChannelConfig = DATA_CHANNEL,
 ): Float32Array {
     const data = new Uint8Array(frame);
+    const { kValues, preambleTone } = channel;
 
     // Pre-synthesise all four tone waveforms once to avoid redundant computation.
-    const tones = K_VALUES.map((_, i) => synthesiseTone(i, symbolSamples, sampleRate));
+    const tones = kValues.map(k => synthesiseTone(k, symbolSamples, sampleRate));
 
     // XOR checksum over every data byte (acoustic-layer error detection).
     let checksum = 0;
@@ -115,7 +154,7 @@ function encodeFrameToAudio(
     };
 
     // 1. Preamble
-    for (let i = 0; i < PREAMBLE_SYMBOLS; i++) writeTone(PREAMBLE_TONE);
+    for (let i = 0; i < PREAMBLE_SYMBOLS; i++) writeTone(preambleTone);
 
     // 2. Sync byte
     for (const s of byteToSymbols(SYNC_BYTE)) writeTone(s);
@@ -272,10 +311,16 @@ export function primeAudio(): void {
  * pre-computes the acoustic frame as raw PCM on the main thread and plays it
  * via an AudioBufferSourceNode, resolving when the `ended` event fires.
  * No DSP runs on the main thread during playback.
+ *
+ * @param channel  Which frequency channel to transmit on.
+ *                 Defaults to DATA_CHANNEL (400–1600 Hz) for the sender.
+ *                 Pass ACK_CHANNEL (2200–3400 Hz) when the receiver sends ACKs.
  */
 export class TransmitterSession {
     private ctx: AudioContext | null = null;
     private isDestroyed = false;
+
+    constructor(private readonly channel: ChannelConfig = DATA_CHANNEL) {}
 
     /** Initialises the AudioContext.  Must be called once before any send(). */
     async init(): Promise<void> {
@@ -293,8 +338,9 @@ export class TransmitterSession {
     }
 
     /**
-     * Encodes `data` as a 4-FSK acoustic frame and plays it to the speaker.
-     * Resolves when playback is complete.  Calls must be awaited sequentially.
+     * Encodes `data` as a 4-FSK acoustic frame on the configured channel and
+     * plays it to the speaker.  Resolves when playback is complete.
+     * Calls must be awaited sequentially.
      */
     send(data: ArrayBuffer): Promise<void> {
         return new Promise((resolve, reject) => {
@@ -307,7 +353,7 @@ export class TransmitterSession {
 
             let pcm: Float32Array;
             try {
-                pcm = encodeFrameToAudio(data, symbolSamples, ctx.sampleRate);
+                pcm = encodeFrameToAudio(data, symbolSamples, ctx.sampleRate, this.channel);
             } catch (err) {
                 reject(err instanceof Error ? err : new Error(String(err)));
                 return;
@@ -346,11 +392,16 @@ export class TransmitterSession {
  *   stop      Call to tear down the AudioWorklet, release the microphone, and
  *             close the AudioContext.
  *
- * @param onData  Invoked with each complete, checksum-verified application frame.
+ * @param onData   Invoked with each complete, checksum-verified application frame.
+ * @param channel  Which frequency channel to listen on.
+ *                 Defaults to DATA_CHANNEL (400–1600 Hz) for the receiver.
+ *                 Pass ACK_CHANNEL (2200–3400 Hz) when the sender listens for ACKs.
  */
 export async function startListening(
     onData: (data: ArrayBuffer) => void,
+    channel: ChannelConfig = DATA_CHANNEL,
 ): Promise<{ analyser: AnalyserNode; stop: () => void }> {
+    const { kValues, preambleTone } = channel;
     const ctx = new AudioContext();
     await ctx.resume();
 
@@ -393,7 +444,7 @@ export async function startListening(
     const rxNode = new AudioWorkletNode(ctx, 'fsk-rx-processor', {
         processorOptions: {
             symbolSamples,
-            kValues: Array.from(K_VALUES),
+            kValues: Array.from(kValues),
             silenceThreshold: SILENCE_THRESHOLD,
         },
     });
@@ -440,7 +491,7 @@ export async function startListening(
 
         switch (rxState) {
             case 'IDLE':
-                if (validTone && toneIndex === PREAMBLE_TONE) {
+                if (validTone && toneIndex === preambleTone) {
                     preambleCount++;
                     if (preambleCount >= PREAMBLE_MIN_SYMBOLS) {
                         rxState = 'SYNC';

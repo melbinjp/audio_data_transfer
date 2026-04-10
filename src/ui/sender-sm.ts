@@ -1,4 +1,4 @@
-import { sendData, startListening } from '../dsp/quiet-modem';
+import { sendData, startListening, ACK_MODEM_PROFILE } from '../dsp/quiet-modem';
 import { createFileDataFrames, createFileStartFrame, deframe, FrameHeader } from '../transport/framing';
 
 const RETRY_LIMIT = 10;
@@ -21,6 +21,7 @@ export class SenderSM {
     private currentFrameIndex = 0;
     private retryCount = 0;
     private ackTimeout: ReturnType<typeof setTimeout> | null = null;
+    private stopAckListener: (() => void) | null = null;
 
     /**
      * @param file The file to be sent.
@@ -59,6 +60,10 @@ export class SenderSM {
         if (message) {
             this.onStateChange(newState, message);
         }
+        if (newState === 'complete' || newState === 'error') {
+            this.stopAckListener?.();
+            this.stopAckListener = null;
+        }
     }
 
     private async sendFrame(frame: ArrayBuffer) {
@@ -89,7 +94,8 @@ export class SenderSM {
             } catch (_err) {
                 // Ignore frames that can't be deframed (may be noise)
             }
-        }).then(() => {
+        }, ACK_MODEM_PROFILE).then(({ stop }) => {
+            this.stopAckListener = stop;
             console.log('Sender ACK listener ready.');
         }).catch(err => {
             const msg = err instanceof Error ? err.message : String(err);

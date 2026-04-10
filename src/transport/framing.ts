@@ -11,7 +11,7 @@ import CRC32 from 'crc-32';
  * balances memory efficiency with frame-count reduction (~64× fewer frames
  * compared to the previous 64-byte size).
  */
-const PAYLOAD_SIZE = 4096;
+export const PAYLOAD_SIZE = 4096;
 
 /**
  * Defines the different types of frames used in the protocol.
@@ -153,6 +153,34 @@ export function createFileDataFrame(
         crc32: CRC32.buf(new Uint8Array(payload)),
     };
 
+    return createFrame(header, payload);
+}
+
+/**
+ * Creates a single `file-data` frame from an already-sliced payload chunk.
+ * Use this instead of {@link createFileDataFrame} when the caller reads each
+ * chunk lazily (e.g. via `File.slice().arrayBuffer()`) to avoid holding the
+ * entire file in memory simultaneously.
+ *
+ * @param payload The raw bytes for this chunk (must be exactly the slice for frameIndex).
+ * @param fileId The ID for this transfer session.
+ * @param frameIndex The zero-based index of the frame.
+ * @param totalFrames The total number of data frames for this file.
+ * @returns An ArrayBuffer representing the single `file-data` frame.
+ */
+export function createFileDataFrameFromPayload(
+    payload: ArrayBuffer,
+    fileId: string,
+    frameIndex: number,
+    totalFrames: number,
+): ArrayBuffer {
+    const header: FrameHeader = {
+        type: 'file-data',
+        fileId,
+        frameIndex,
+        totalFrames,
+        crc32: CRC32.buf(new Uint8Array(payload)),
+    };
     return createFrame(header, payload);
 }
 

@@ -56,11 +56,15 @@ export function primeAudio(): void {
 /**
  * Profile used for file-data frames (sender → receiver).
  *
- * 'audible-fsk-robust' uses FSK8 modulation with a v29 convolutional outer FEC,
- * centred at 8 kHz with 250 samples/symbol.  The long integration window makes
- * it resilient to speaker/microphone gain variations across a real air gap.
+ * 'audible-fsk' uses FSK8 modulation with a v29 convolutional outer FEC,
+ * centred at 8 kHz with 50 samples/symbol (~250 bytes/sec at typical sample
+ * rates).  This is 5× faster than the former 'audible-fsk-robust' profile
+ * (250 samples/symbol, ~50 bytes/sec), which caused every 4096-byte frame to
+ * require ~81 s of audio — far exceeding the 30 s transmission timeout and
+ * making all transfers fail after the first frame.  'audible-fsk' still uses
+ * the same FSK8/v29-FEC modem and is reliable for typical desktop/phone use.
  */
-export const DATA_MODEM_PROFILE = 'audible-fsk-robust';
+export const DATA_MODEM_PROFILE = 'audible-fsk';
 
 /**
  * Profile used for ACK frames (receiver → sender).
@@ -185,8 +189,15 @@ doInit().catch((err) => {
     initPromise = null;
 });
 
-/** Maximum time (ms) to wait for a single frame transmission to finish. */
-const SEND_TIMEOUT_MS = 30_000;
+/** Maximum time (ms) to wait for a single frame transmission to finish.
+ *
+ * With the 'audible-fsk' profile (50 samples/symbol, FSK8) the effective
+ * application-layer throughput is approximately 250 bytes/sec.  A 4096-byte
+ * application frame therefore takes roughly 4096 / 250 ≈ 16 s to play out at
+ * typical sample rates.  60 s provides a 3.7× safety margin to accommodate
+ * slower devices and non-standard sample rates (e.g. 44.1 kHz).
+ */
+const SEND_TIMEOUT_MS = 60_000;
 
 /**
  * Transmit an ArrayBuffer as audio.
@@ -230,6 +241,98 @@ export async function sendData(data: ArrayBuffer, profile = DATA_MODEM_PROFILE):
             reject(err);
         }
     });
+}
+
+/**
+ * A reusable transmitter session that creates a single `Quiet.transmitter`
+ * (and therefore a single `ScriptProcessorNode`) for an entire file transfer,
+ * rather than creating and tearing down one per frame.
+ *
+ * Each `send()` call updates a mutable callback reference that the shared
+ * `onFinish` handler delegates to, so the quiet.js transmitter can be reused
+ * across multiple sequential `transmit()` invocations without being destroyed
+ * and recreated between frames.
+ *
+ * Usage:
+ *   const session = new TransmitterSession();
+ *   await session.init();
+ *   await session.send(frame1);
+ *   await session.send(frame2);
+ *   session.destroy();
+ */
+export class TransmitterSession {
+    private transmitter: { transmit: (data: ArrayBuffer) => void; destroy: () => void } | null = null;
+    /** Resolves the Promise returned by the current in-flight `send()` call. */
+    private onFinishRef: (() => void) | null = null;
+    private isDestroyed = false;
+
+    constructor(private readonly profile: string = DATA_MODEM_PROFILE) {}
+
+    /**
+     * Initialises Quiet.js and creates the underlying transmitter.
+     * Must be called once before any `send()` calls.
+     */
+    async init(): Promise<void> {
+        await initQuiet();
+        this.transmitter = Quiet.transmitter({
+            profile: this.profile,
+            onFinish: () => {
+                console.log('Transmission finished.');
+                // Delegate to whichever frame's resolve callback is currently set.
+                this.onFinishRef?.();
+            },
+            clampFrame: false,
+        });
+    }
+
+    /**
+     * Transmits `data` as audio and resolves when playback is complete.
+     * Calls must be awaited sequentially — do not overlap concurrent sends.
+     */
+    send(data: ArrayBuffer): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const transmitter = this.transmitter;
+            if (this.isDestroyed || !transmitter) {
+                reject(new Error('TransmitterSession has been destroyed'));
+                return;
+            }
+
+            const timeout = setTimeout(() => {
+                this.onFinishRef = null;
+                reject(new Error(
+                    'Transmission timed out: the browser AudioContext may be suspended. ' +
+                    'Ensure primeAudio() was called synchronously in the click handler ' +
+                    'before any async operations.',
+                ));
+            }, SEND_TIMEOUT_MS);
+
+            this.onFinishRef = () => {
+                clearTimeout(timeout);
+                this.onFinishRef = null;
+                resolve();
+            };
+
+            try {
+                transmitter.transmit(data);
+            } catch (err) {
+                clearTimeout(timeout);
+                this.onFinishRef = null;
+                reject(err);
+            }
+        });
+    }
+
+    /**
+     * Immediately stops audio playback and releases the `ScriptProcessorNode`.
+     * Safe to call multiple times.
+     */
+    destroy(): void {
+        if (!this.isDestroyed) {
+            this.isDestroyed = true;
+            this.transmitter?.destroy();
+            this.transmitter = null;
+        }
+    }
 }
 
 /**

@@ -222,7 +222,7 @@ export async function sendData(data: ArrayBuffer, profile = DATA_MODEM_PROFILE):
                     transmitter.destroy();
                     resolve();
                 },
-                clampFrame: true,
+                clampFrame: false,
             });
             transmitter.transmit(data);
         } catch (err) {

@@ -15,7 +15,7 @@ var Quiet = (function() {
     // initialization flags
     var emscriptenInitialized = false;
     var profilesFetched = false;
-    var memoryInitializerPrefix = "";
+    var memoryInitializerPrefixURL = "";
 
     // profiles is the string content of quiet-profiles.json
     var profiles;

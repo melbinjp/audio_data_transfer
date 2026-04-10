@@ -1,4 +1,4 @@
-import { sendData, startListening } from '../dsp/quiet-modem';
+import { sendData, startListening, primeAudio } from '../dsp/quiet-modem';
 import { createAckFrame, createAckStartFrame, deframe, ReassemblyManager } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
@@ -17,6 +17,9 @@ export function initializeReceiver() {
     let reassemblyManager: ReassemblyManager | null = null;
 
     receiveButton.addEventListener('click', async () => {
+        // Unlock the Web Audio API from within this synchronous user-gesture
+        // handler before any await so that quiet.js can resume its AudioContext.
+        primeAudio();
         console.log('Starting to listen...');
         receiveButton.disabled = true;
         statusEl.textContent = 'Listening...';

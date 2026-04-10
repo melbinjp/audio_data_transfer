@@ -1,4 +1,5 @@
 import { SenderSM } from './sender-sm';
+import { primeAudio } from '../dsp/quiet-modem';
 
 /**
  * Initializes the sender UI, wiring up the file picker and send button
@@ -24,6 +25,10 @@ export function initializeSender() {
 
     sendButton.addEventListener('click', () => {
         if (!selectedFile) return;
+        // Unlock the Web Audio API from within this synchronous user-gesture
+        // handler so that AudioContext.resume() calls in subsequent async code
+        // (inside quiet.js) are allowed by Chrome's autoplay policy.
+        primeAudio();
         sendButton.disabled = true;
 
         const sm = new SenderSM(

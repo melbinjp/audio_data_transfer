@@ -54,14 +54,25 @@ export function primeAudio(): void {
 }
 
 /**
- * Profile used for all transmit/receive operations.
+ * Profile used for file-data frames (sender → receiver).
  *
  * 'audible-fsk-robust' uses FSK8 modulation with a v29 convolutional outer FEC,
- * centred at 8 kHz.  FSK is more tolerant of amplitude variations (different
- * speaker/microphone gains) than GMSK, making it better suited for real-world
- * device-to-device transfers across an air gap.
+ * centred at 8 kHz with 250 samples/symbol.  The long integration window makes
+ * it resilient to speaker/microphone gain variations across a real air gap.
  */
-const MODEM_PROFILE = 'audible-fsk-robust';
+export const DATA_MODEM_PROFILE = 'audible-fsk-robust';
+
+/**
+ * Profile used for ACK frames (receiver → sender).
+ *
+ * 'audible-fsk' uses the same FSK8/v29 modem as DATA_MODEM_PROFILE but with
+ * only 50 samples/symbol (vs 250), reducing the Kaiser-filter tap-count from
+ * 3 250 to 650.  This cuts the per-audio-buffer Emscripten DSP cost by ~5×,
+ * keeping the main thread responsive while the sender is simultaneously
+ * transmitting data and listening for ACKs.  ACKs are small and benefit from
+ * the app-level retry logic, so the slightly reduced noise immunity is fine.
+ */
+export const ACK_MODEM_PROFILE = 'audible-fsk';
 
 /**
  * Accumulates the raw byte stream delivered by quiet.js's per-acoustic-frame
@@ -182,13 +193,16 @@ const SEND_TIMEOUT_MS = 30_000;
  * Returns a Promise that resolves when onFinish fires (all audio played out).
  * The transmitter handles internal framing — just pass the full data buffer.
  *
+ * @param data The data to transmit.
+ * @param profile The Quiet.js modem profile to use (defaults to DATA_MODEM_PROFILE).
+ *
  * A timeout is applied so that if the AudioContext is permanently suspended
  * (e.g. blocked by the browser's autoplay policy) the caller receives a
  * rejection instead of hanging forever.  Call {@link primeAudio} from a
  * synchronous user-gesture handler before invoking this function to prevent
  * the timeout from triggering.
  */
-export async function sendData(data: ArrayBuffer): Promise<void> {
+export async function sendData(data: ArrayBuffer, profile = DATA_MODEM_PROFILE): Promise<void> {
     await initQuiet();
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -201,7 +215,7 @@ export async function sendData(data: ArrayBuffer): Promise<void> {
 
         try {
             const transmitter = Quiet.transmitter({
-                profile: MODEM_PROFILE,
+                profile: profile,
                 onFinish: () => {
                     clearTimeout(timeout);
                     console.log('Transmission finished.');
@@ -220,7 +234,14 @@ export async function sendData(data: ArrayBuffer): Promise<void> {
 
 /**
  * Start listening for audio data via the microphone.
- * Returns an AnalyserNode for spectrogram visualization.
+ * Returns an AnalyserNode for spectrogram visualization and a `stop` function
+ * that tears down the receiver, mic stream, and AudioContext.
+ *
+ * Call `stop()` as soon as the session is no longer needed to release the
+ * ScriptProcessorNode (which runs DSP on the main thread) and the microphone.
+ *
+ * @param onData Callback invoked with each complete reassembled application frame.
+ * @param profile The Quiet.js modem profile to use (defaults to DATA_MODEM_PROFILE).
  *
  * Quiet.js delivers `onReceive` callbacks once per PHY-layer acoustic frame
  * (~20–25 bytes).  Internally this function uses a `StreamBuffer` to
@@ -229,7 +250,10 @@ export async function sendData(data: ArrayBuffer): Promise<void> {
  * `createFrame`) has been fully received.  Corrupted or partial frames are
  * silently discarded so that the next retransmit starts with a clean buffer.
  */
-export async function startListening(onData: (data: ArrayBuffer) => void): Promise<{ analyser: AnalyserNode }> {
+export async function startListening(
+    onData: (data: ArrayBuffer) => void,
+    profile = DATA_MODEM_PROFILE,
+): Promise<{ analyser: AnalyserNode; stop: () => void }> {
     await initQuiet();
 
     // Ensure quiet.js can call getUserMedia on modern Chrome (74+) where the
@@ -256,9 +280,10 @@ export async function startListening(onData: (data: ArrayBuffer) => void): Promi
     // Create the Quiet receiver. It will call getUserMedia internally as well.
     // Both our analyser and Quiet's receiver will process the mic stream.
     // Wrap in a Promise so that a receiver-creation failure rejects the caller.
+    let quietReceiver: { destroy: () => void } | null = null;
     await new Promise<void>((resolve, reject) => {
-        Quiet.receiver({
-            profile: MODEM_PROFILE,
+        quietReceiver = Quiet.receiver({
+            profile: profile,
             onReceive: (chunk: ArrayBuffer) => {
                 streamBuf.append(chunk);
 
@@ -291,5 +316,18 @@ export async function startListening(onData: (data: ArrayBuffer) => void): Promi
         });
     });
 
-    return { analyser };
+    /**
+     * Tears down the Quiet receiver, stops the microphone stream, and closes
+     * the local AudioContext.  Call this as soon as listening is no longer
+     * needed so that the ScriptProcessorNode (which runs Emscripten DSP on the
+     * main thread) is released promptly.
+     */
+    const stop = () => {
+        quietReceiver?.destroy();
+        quietReceiver = null;
+        stream.getTracks().forEach(track => track.stop());
+        audioCtx.close().catch(() => {});
+    };
+
+    return { analyser, stop };
 }

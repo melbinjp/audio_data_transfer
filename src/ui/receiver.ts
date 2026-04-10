@@ -1,4 +1,4 @@
-import { sendData, startListening, primeAudio } from '../dsp/quiet-modem';
+import { sendData, startListening, primeAudio, ACK_MODEM_PROFILE } from '../dsp/quiet-modem';
 import { createAckFrame, createAckStartFrame, deframe, ReassemblyManager } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
@@ -15,6 +15,7 @@ export function initializeReceiver() {
 
     let spectrogram: Spectrogram | null = null;
     let reassemblyManager: ReassemblyManager | null = null;
+    let stopListener: (() => void) | null = null;
 
     receiveButton.addEventListener('click', async () => {
         // Unlock the Web Audio API from within this synchronous user-gesture
@@ -26,6 +27,10 @@ export function initializeReceiver() {
         downloadLink.style.display = 'none';
         receiveProgress.value = 0;
 
+        // Tear down any previous listener before creating a new one to prevent
+        // accumulation of ScriptProcessorNodes (Emscripten DSP) on the main thread.
+        stopListener?.();
+        stopListener = null;
         if (spectrogram) {
             spectrogram.stop();
         }
@@ -35,7 +40,7 @@ export function initializeReceiver() {
         reassemblyManager = new ReassemblyManager();
 
         try {
-            const { analyser } = await startListening(async (frame) => {
+            const { analyser, stop } = await startListening(async (frame) => {
                 try {
                     const { header, payload } = deframe(frame);
 
@@ -43,7 +48,7 @@ export function initializeReceiver() {
                         case 'file-start': {
                             reassemblyManager!.getReassembler(header);
                             statusEl.textContent = `Receiving file: ${header.fileName}`;
-                            await sendData(createAckStartFrame(header.fileId));
+                            await sendData(createAckStartFrame(header.fileId), ACK_MODEM_PROFILE);
                             break;
                         }
                         case 'file-data': {
@@ -51,7 +56,7 @@ export function initializeReceiver() {
                             receiveProgress.max = header.totalFrames!;
                             receiveProgress.value = header.frameIndex! + 1;
 
-                            await sendData(createAckFrame(header.fileId, header.frameIndex!));
+                            await sendData(createAckFrame(header.fileId, header.frameIndex!), ACK_MODEM_PROFILE);
 
                             const file = reassemblyManager!.processFrame(header, payload);
                             if (file) {
@@ -64,9 +69,14 @@ export function initializeReceiver() {
                                 receiveButton.disabled = false;
                                 if (spectrogram) {
                                     spectrogram.stop();
+                                    spectrogram = null;
                                 }
                                 reassemblyManager?.destroy();
                                 reassemblyManager = null;
+                                // Release the receiver ScriptProcessorNode now that the
+                                // transfer is complete so it stops consuming main-thread CPU.
+                                stopListener?.();
+                                stopListener = null;
                             }
                             break;
                         }
@@ -78,6 +88,7 @@ export function initializeReceiver() {
                 }
             });
 
+            stopListener = stop;
             spectrogram = new Spectrogram(spectrogramCanvas, analyser);
             spectrogram.start();
 

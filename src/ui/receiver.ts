@@ -1,19 +1,16 @@
-import { startListening, primeAudio } from '../dsp/fsk-modem';
-import { deframe, ReassemblyManager } from '../transport/framing';
+import { startListening, primeAudio, TransmitterSession } from '../dsp/fsk-modem';
+import { deframe, ReassemblyManager, createAckFrame, createAckStartFrame } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
 /**
  * Initializes the receiver UI, wiring up the receive button and handling
- * the logic for receiving frames and reassembling the file.
+ * the logic for receiving frames, reassembling the file, and sending ACKs.
  *
- * ACK sending has been intentionally removed.  Sending an ACK required running
- * a Quiet.js transmitter (ScriptProcessorNode) concurrently with the active
- * data receiver (another ScriptProcessorNode).  Both nodes run heavy Emscripten
- * DSP synchronously on the main thread via the deprecated onaudioprocess
- * callback, and their combined CPU load caused the main thread to freeze and
- * the browser tab to crash with an out-of-memory error.  One-way transmission
- * (sender → receiver, no ACKs) keeps only a single ScriptProcessorNode active
- * at any time, allowing the browser to stay responsive.
+ * The new 4-FSK modem uses AudioBufferSourceNode (TX) and AudioWorkletNode
+ * (RX) which run on the audio rendering thread and safely coexist.  This
+ * allows the receiver to send ACKs while simultaneously listening for the
+ * next data frame, which was not possible with the deprecated ScriptProcessorNode
+ * approach that previously caused browser crashes.
  */
 export function initializeReceiver() {
     const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
@@ -28,7 +25,8 @@ export function initializeReceiver() {
 
     receiveButton.addEventListener('click', async () => {
         // Unlock the Web Audio API from within this synchronous user-gesture
-        // handler before any await so that quiet.js can resume its AudioContext.
+        // handler before any await so that AudioContext.resume() calls in
+        // subsequent async code are allowed by Chrome's autoplay policy.
         primeAudio();
         console.log('Starting to listen...');
         receiveButton.disabled = true;
@@ -37,7 +35,7 @@ export function initializeReceiver() {
         receiveProgress.value = 0;
 
         // Tear down any previous listener before creating a new one to prevent
-        // accumulation of ScriptProcessorNodes (Emscripten DSP) on the main thread.
+        // accumulation of AudioWorkletNodes on the audio rendering thread.
         stopListener?.();
         stopListener = null;
         if (spectrogram) {
@@ -48,6 +46,32 @@ export function initializeReceiver() {
         }
         reassemblyManager = new ReassemblyManager();
 
+        // Per-session ACK sender.  A busy flag serialises ACK transmissions so
+        // that only one TransmitterSession is active at a time.  Frames arriving
+        // while an ACK is in flight are still processed — the sender will retry
+        // if the ACK is not received within its timeout window.
+        let isSendingAck = false;
+        function sendAck(ackFrame: ArrayBuffer): void {
+            if (isSendingAck) {
+                console.warn('Receiver: ACK skipped — previous ACK still transmitting');
+                return;
+            }
+            isSendingAck = true;
+            (async () => {
+                const ackSession = new TransmitterSession();
+                try {
+                    await ackSession.init();
+                    await ackSession.send(ackFrame);
+                    ackSession.destroy();
+                } catch (err) {
+                    console.error('Receiver: ACK transmission error:', err);
+                    ackSession.destroy();
+                } finally {
+                    isSendingAck = false;
+                }
+            })();
+        }
+
         try {
             const { analyser, stop } = await startListening((frame) => {
                 try {
@@ -57,6 +81,7 @@ export function initializeReceiver() {
                         case 'file-start': {
                             reassemblyManager!.getReassembler(header);
                             statusEl.textContent = `Receiving file: ${header.fileName}`;
+                            sendAck(createAckStartFrame(header.fileId));
                             break;
                         }
                         case 'file-data': {
@@ -65,6 +90,8 @@ export function initializeReceiver() {
                             receiveProgress.value = header.frameIndex! + 1;
 
                             const file = reassemblyManager!.processFrame(header, payload);
+                            sendAck(createAckFrame(header.fileId, header.frameIndex!));
+
                             if (file) {
                                 statusEl.textContent = `File "${file.name}" received!`;
                                 const url = URL.createObjectURL(file);
@@ -79,8 +106,8 @@ export function initializeReceiver() {
                                 }
                                 reassemblyManager?.destroy();
                                 reassemblyManager = null;
-                                // Release the receiver ScriptProcessorNode now that the
-                                // transfer is complete so it stops consuming main-thread CPU.
+                                // Release the receiver AudioWorkletNode now that the
+                                // transfer is complete so it stops consuming audio thread CPU.
                                 stopListener?.();
                                 stopListener = null;
                             }

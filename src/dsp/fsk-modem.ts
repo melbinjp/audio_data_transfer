@@ -362,7 +362,10 @@ export async function startListening(
         );
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }).catch(
+    const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false,
+    }).catch(
         (err: unknown) => {
             ctx.close().catch(() => {});
             const msg = err instanceof Error ? err.message : String(err);

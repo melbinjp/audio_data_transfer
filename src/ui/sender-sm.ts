@@ -1,13 +1,23 @@
-import { TransmitterSession } from '../dsp/fsk-modem';
-import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame } from '../transport/framing';
+import { TransmitterSession, startListening } from '../dsp/fsk-modem';
+import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame, deframe } from '../transport/framing';
 
 /**
  * Defines the possible states of the sender state machine.
  */
 export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
 
+/** How long the sender waits for an ACK before retrying a frame (ms). */
+const ACK_TIMEOUT_MS = 10000;
+/** Maximum number of transmission attempts per frame before aborting. */
+const MAX_RETRIES = 3;
+
 /**
- * Sends a file as audio frames sequentially without requiring ACKs.
+ * Sends a file as audio frames using a stop-and-wait ARQ protocol.
+ *
+ * Each frame (the handshake and every data chunk) is retransmitted up to
+ * MAX_RETRIES times if the expected ACK is not received within ACK_TIMEOUT_MS.
+ * This guarantees reliable delivery even when individual acoustic frames are
+ * corrupted or missed by the receiver.
  *
  * Key design decisions that prevent out-of-memory crashes and transmission
  * timeouts:
@@ -17,15 +27,16 @@ export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
  *    immediately before it is transmitted and discarded afterwards.  Peak RAM
  *    usage is therefore O(1 frame) rather than O(file size).
  *
- * 2. **Single `TransmitterSession`** — one `Quiet.transmitter` (and one
- *    `ScriptProcessorNode`) is created for the whole transfer and reused across
+ * 2. **Single `TransmitterSession`** — one AudioContext and one
+ *    AudioBufferSourceNode is created for the whole transfer and reused across
  *    all frames.  Creating/destroying a node per frame was causing unnecessary
  *    DSP churn on the main thread.
  *
- * 3. **No concurrent ACK receiver** — removing the bidirectional ACK protocol
- *    means only one `ScriptProcessorNode` is active at any time.  Running two
- *    concurrent nodes (transmitter + ACK receiver) previously starved the
- *    browser's audio thread.
+ * 3. **Safe concurrent TX + RX** — the new 4-FSK modem uses
+ *    AudioBufferSourceNode (TX) and AudioWorkletNode (RX), both of which run
+ *    on the audio rendering thread.  Unlike the deprecated ScriptProcessorNode,
+ *    they do not block the main thread and can coexist without crashes.  This
+ *    makes it safe to keep an ACK listener running throughout the transfer.
  */
 export class SenderSM {
     private state: SenderState = 'idle';
@@ -77,25 +88,101 @@ export class SenderSM {
             return;
         }
 
-        try {
-            // Transmit the handshake frame first so the receiver can prepare its
-            // reassembly buffer before any data frames arrive.
-            const startFrame = createFileStartFrame(this.file, this.fileId);
-            this.setState('sending', 'Sending handshake frame...');
-            await session.send(startFrame);
+        // Start a persistent ACK listener for the duration of the transfer.
+        // AudioBufferSourceNode (TX) and AudioWorkletNode (RX) run on the audio
+        // rendering thread and safely coexist, so no main-thread starvation occurs.
+        let stopAckListener: (() => void) | null = null;
+        type AckWaiter = {
+            type: string;
+            frameIndex: number;
+            resolve: (received: boolean) => void;
+            timer: ReturnType<typeof setTimeout>;
+        };
+        let pendingWaiter: AckWaiter | null = null;
 
-            // Send every data frame in order.  Each chunk is read lazily with
-            // File.slice() so that only ~4 KB is held in memory at a time,
-            // regardless of the total file size.  Awaiting session.send() ensures
-            // each frame's audio has fully played out before the next one begins,
-            // preventing the quiet.js transmit queue from growing unboundedly.
+        try {
+            const { stop } = await startListening((rawFrame) => {
+                try {
+                    const { header } = deframe(rawFrame);
+                    if (header.fileId !== this.fileId || !pendingWaiter) return;
+                    const w = pendingWaiter;
+                    const frameMatches = w.frameIndex === -1 || header.frameIndex === w.frameIndex;
+                    if (header.type === w.type && frameMatches) {
+                        clearTimeout(w.timer);
+                        pendingWaiter = null;
+                        w.resolve(true);
+                    }
+                } catch {
+                    // Ignore malformed or noise-induced frames.
+                }
+            });
+            stopAckListener = stop;
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.setState('error', `Failed to start ACK listener: ${msg}`);
+            session.destroy();
+            return;
+        }
+
+        /**
+         * Returns a Promise that resolves to `true` when the expected ACK
+         * arrives, or `false` if ACK_TIMEOUT_MS elapses first.
+         * @param type      Expected frame type ('ack-start' or 'ack').
+         * @param frameIndex Expected frameIndex, or -1 to match any value.
+         */
+        const waitForAck = (type: string, frameIndex: number): Promise<boolean> =>
+            new Promise((resolve) => {
+                const timer = setTimeout(() => {
+                    if (pendingWaiter?.resolve === resolve) pendingWaiter = null;
+                    resolve(false);
+                }, ACK_TIMEOUT_MS);
+                pendingWaiter = { type, frameIndex, resolve, timer };
+            });
+
+        try {
+            // ── Handshake ──────────────────────────────────────────────────────
+            let ackStartReceived = false;
+            for (let attempt = 0; attempt < MAX_RETRIES && !ackStartReceived; attempt++) {
+                this.setState(
+                    'sending',
+                    attempt === 0
+                        ? 'Sending handshake frame...'
+                        : `Retrying handshake (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+                );
+                const startFrame = createFileStartFrame(this.file, this.fileId);
+                await session.send(startFrame);
+                ackStartReceived = await waitForAck('ack-start', -1);
+            }
+            if (!ackStartReceived) {
+                this.setState('error', 'No acknowledgement from receiver. Is the receiver listening?');
+                return;
+            }
+
+            // ── Data frames ────────────────────────────────────────────────────
+            // Each chunk is read lazily with File.slice() so that only ~4 KB is
+            // held in memory at a time, regardless of the total file size.
             for (let i = 0; i < totalFrames; i++) {
-                this.setState('sending', `Sending frame ${i + 1}/${totalFrames}...`);
-                const start = i * PAYLOAD_SIZE;
-                const end = start + PAYLOAD_SIZE;
-                const chunkBuffer = await this.file.slice(start, end).arrayBuffer();
-                const frame = createFileDataFrameFromPayload(chunkBuffer, this.fileId, i, totalFrames);
-                await session.send(frame);
+                let ackReceived = false;
+                for (let attempt = 0; attempt < MAX_RETRIES && !ackReceived; attempt++) {
+                    this.setState(
+                        'sending',
+                        attempt === 0
+                            ? `Sending frame ${i + 1}/${totalFrames}...`
+                            : `Retrying frame ${i + 1}/${totalFrames} (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+                    );
+                    const start = i * PAYLOAD_SIZE;
+                    const chunkBuffer = await this.file.slice(start, start + PAYLOAD_SIZE).arrayBuffer();
+                    const frame = createFileDataFrameFromPayload(chunkBuffer, this.fileId, i, totalFrames);
+                    await session.send(frame);
+                    ackReceived = await waitForAck('ack', i);
+                }
+                if (!ackReceived) {
+                    this.setState(
+                        'error',
+                        `Frame ${i + 1}/${totalFrames} was not acknowledged after ${MAX_RETRIES} attempts. Transfer failed.`,
+                    );
+                    return;
+                }
                 this.onProgress(i + 1, totalFrames);
             }
 
@@ -105,6 +192,7 @@ export class SenderSM {
             this.setState('error', `Transmission error: ${msg}`);
         } finally {
             session.destroy();
+            stopAckListener?.();
         }
     }
 }

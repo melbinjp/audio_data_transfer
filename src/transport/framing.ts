@@ -258,8 +258,9 @@ export function deframe(frame: ArrayBuffer): { header: FrameHeader; payload: Arr
     let header: FrameHeader;
     try {
         header = JSON.parse(headerString);
-    } catch {
-        throw new Error('Frame corrupted: header is not valid JSON');
+    } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(`Frame corrupted: header is not valid JSON (${detail})`);
     }
 
     if (header.crc32 !== undefined) {

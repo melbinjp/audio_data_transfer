@@ -75,8 +75,14 @@ export const ACK_K_VALUES = [22, 26, 30, 34] as const;
  */
 export const ACK_PREAMBLE_TONE = 1;
 
-/** Number of preamble symbols prepended to every acoustic frame. */
-export const PREAMBLE_SYMBOLS = 20;
+/**
+ * Number of preamble symbols prepended to every data acoustic frame.
+ * Raised from 20 to 30 to give the receiver more time to re-acquire preamble
+ * lock after ACK transmission and acoustic ring-down (2A).  At 10 ms/symbol
+ * this adds 100 ms of preamble per frame, a worthwhile cost for the
+ * substantially improved lock reliability on subsequent frames.
+ */
+export const PREAMBLE_SYMBOLS = 30;
 
 /**
  * Number of preamble symbols prepended to every ACK frame (receiver → sender).
@@ -144,3 +150,35 @@ export const SYNC_MAX_RETRIES = 16;
  * distorting one of the four FSK tones.
  */
 export const SYNC_HAMMING_TOLERANCE = 1;
+
+/**
+ * Preamble-credit cost per non-preamble symbol in IDLE state.
+ *
+ * The classic approach resets `preambleCount` to 0 on any miss, so a single
+ * noise burst (e.g. the tail of ACK speaker ring-down) erases all accumulated
+ * preamble progress.  A "leaky bucket" approach subtracts this cost instead,
+ * meaning brief noise bursts slow preamble lock rather than preventing it.
+ *
+ * With PREAMBLE_MISS_COST = 1:
+ *   • Each bad symbol costs 1 credit (vs. resetting to 0).
+ *   • A burst of 3 noise symbols costs only 3 credits — the detector recovers
+ *     after 3 more good preamble symbols rather than needing PREAMBLE_MIN_SYMBOLS
+ *     all over again (2B).
+ */
+export const PREAMBLE_MISS_COST = 1;
+
+/**
+ * Milliseconds to wait after ACK playback finishes before re-enabling the
+ * receiver's RX state machine (1C).
+ *
+ * Smartphone speakers continue to vibrate ("ring down") briefly after the
+ * last PCM sample plays.  Room reverb also produces a tail of energy in the
+ * data-channel band (400–1600 Hz).  Keeping the RX muted for this window
+ * prevents the acoustic tail from being mistaken for preamble symbols on the
+ * next incoming data frame.
+ *
+ * 50 ms is sufficient for typical consumer hardware in a quiet room.  Raise
+ * this value if ring-down artefacts are still visible in the spectrogram after
+ * ACK transmission ends.
+ */
+export const ACK_RING_DOWN_MS = 50;

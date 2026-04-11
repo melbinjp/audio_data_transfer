@@ -42,6 +42,7 @@ import {
     ACK_PREAMBLE_SYMBOLS,
     PREAMBLE_MIN_SYMBOLS,
     ACK_PREAMBLE_MIN_SYMBOLS,
+    PREAMBLE_MISS_COST,
     SYNC_BYTE,
     GUARD_SYMBOLS,
     SILENCE_THRESHOLD,
@@ -423,7 +424,7 @@ export class TransmitterSession {
 export async function startListening(
     onData: (data: ArrayBuffer) => void,
     channel: ChannelConfig = DATA_CHANNEL,
-): Promise<{ analyser: AnalyserNode; stop: () => void }> {
+): Promise<{ analyser: AnalyserNode; stop: () => void; setRxMuted: (muted: boolean) => void }> {
     const { kValues, preambleTone } = channel;
     const ctx = new AudioContext();
     await ctx.resume();
@@ -504,6 +505,16 @@ export async function startListening(
     let syncRetryCount = 0;          // consecutive failed sync-byte decode attempts
     let syncHammingCorrected = false; // true when the sync byte was accepted via Hamming tolerance
 
+    // ── RX mute gate ─────────────────────────────────────────────────────────
+    // When the receiver is transmitting an ACK, its own speaker output is picked
+    // up by the microphone.  Even though the ACK channel (2200–3400 Hz) does not
+    // overlap the data channel (400–1600 Hz), speaker distortion, room reverb,
+    // and microphone non-linearities bleed energy across bands.  Muting the RX
+    // state machine during ACK transmission (and for a short ring-down period
+    // afterward) prevents this self-interference from corrupting preamble lock
+    // on the next incoming data frame (1C).
+    let rxMuted = false;
+
     function resetState() {
         rxState = 'IDLE';
         preambleCount = 0;
@@ -534,6 +545,11 @@ export async function startListening(
         const msg = event.data as { type: string; toneIndex: number; rms: number; dominance: number };
         if (msg.type !== 'symbol') return;
 
+        // Discard all symbols while muted (e.g. during ACK transmission and
+        // speaker ring-down).  This prevents the receiver's own acoustic output
+        // from being mistaken for an incoming preamble or data byte.
+        if (rxMuted) return;
+
         const { toneIndex, dominance } = msg;
         const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
 
@@ -546,7 +562,11 @@ export async function startListening(
                         symbolAccum = [];
                     }
                 } else {
-                    preambleCount = 0;
+                    // Leaky-bucket: subtract PREAMBLE_MISS_COST rather than
+                    // resetting to 0.  Brief noise bursts (e.g. reverb after ACK
+                    // ring-down) reduce progress by at most a few credits instead
+                    // of wiping out all accumulated preamble lock (2B).
+                    preambleCount = Math.max(0, preambleCount - PREAMBLE_MISS_COST);
                 }
                 break;
 
@@ -697,5 +717,26 @@ export async function startListening(
         ctx.close().catch(() => {});
     };
 
-    return { analyser, stop };
+    /**
+     * Mutes or unmutes the RX state machine.
+     *
+     * Call `setRxMuted(true)` immediately before transmitting an ACK to prevent
+     * the receiver's own speaker output from being fed back into the Goertzel
+     * detector.  Call `setRxMuted(false)` after the ACK finishes plus a short
+     * ring-down pause (ACK_RING_DOWN_MS) to resume normal frame reception.
+     *
+     * Transitioning to muted also calls `resetState()` so that any frame
+     * partially decoded up to this point is discarded cleanly (in practice the
+     * state machine is already in IDLE when ACKs are sent, but this makes the
+     * guarantee explicit).
+     */
+    const setRxMuted = (muted: boolean): void => {
+        if (muted && !rxMuted) {
+            // Discard any partial frame that might be in-progress before muting.
+            resetState();
+        }
+        rxMuted = muted;
+    };
+
+    return { analyser, stop, setRxMuted };
 }

@@ -222,13 +222,45 @@ export function createFileDataFrames(fileBuffer: ArrayBuffer, fileId: string): A
  */
 export function deframe(frame: ArrayBuffer): { header: FrameHeader; payload: ArrayBuffer } {
     const frameView = new Uint8Array(frame);
+
+    // Minimum valid frame: 2-byte content-length + 1-byte header-length + at
+    // least 2 bytes of JSON header (e.g. "{}").
+    if (frameView.length < 5) {
+        throw new Error('Frame too short: expected at least 5 bytes');
+    }
+
     // Skip the 2-byte total-content-length prefix; start reading content at offset 2.
+    const contentLength = (frameView[0] << 8) | frameView[1];
     const headerLength = frameView[2];
+
+    // Validate header-length against the actual frame size.
+    if (headerLength === 0) {
+        throw new Error('Frame corrupted: header length is zero');
+    }
+    if (3 + headerLength > frameView.length) {
+        throw new Error(
+            `Frame corrupted: header length ${headerLength} exceeds frame size ${frameView.length}`,
+        );
+    }
+
+    // Validate the content-length prefix against the actual frame size.
+    if (contentLength + 2 !== frameView.length) {
+        throw new Error(
+            `Frame corrupted: content-length prefix (${contentLength}) does not match ` +
+            `actual content size (${frameView.length - 2})`,
+        );
+    }
+
     const headerBuffer = frame.slice(3, 3 + headerLength);
     const payload = frame.slice(3 + headerLength);
 
     const headerString = new TextDecoder().decode(headerBuffer);
-    const header: FrameHeader = JSON.parse(headerString);
+    let header: FrameHeader;
+    try {
+        header = JSON.parse(headerString);
+    } catch {
+        throw new Error('Frame corrupted: header is not valid JSON');
+    }
 
     if (header.crc32 !== undefined) {
         const payloadCrc = CRC32.buf(new Uint8Array(payload));

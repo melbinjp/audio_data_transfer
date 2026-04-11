@@ -99,6 +99,46 @@ describe('framing', () => {
         expect(() => deframe(tamperedFrame.buffer)).toThrow('CRC32 mismatch');
     });
 
+    it('should throw for a frame that is too short', () => {
+        const shortFrame = new Uint8Array([0, 1, 5]).buffer;
+        expect(() => deframe(shortFrame)).toThrow('Frame too short');
+    });
+
+    it('should throw for a frame with zero header length', () => {
+        // content-length = 1 (just the header-length byte), headerLength = 0
+        const frame = new Uint8Array([0, 1, 0, 0, 0]).buffer;
+        expect(() => deframe(frame)).toThrow('header length is zero');
+    });
+
+    it('should throw for a frame with header length exceeding frame size', () => {
+        // content-length = 3, headerLength = 255 (way beyond actual frame)
+        const frame = new Uint8Array([0, 3, 255, 0x7B, 0x7D]).buffer;
+        expect(() => deframe(frame)).toThrow('header length 255 exceeds frame size');
+    });
+
+    it('should throw for a frame with corrupted JSON header', () => {
+        // Build a structurally valid frame but with garbage header bytes
+        const garbageHeader = new Uint8Array([0xFF, 0xFE, 0xFD]);
+        const contentLength = 1 + garbageHeader.length; // headerLen byte + header
+        const frame = new Uint8Array(2 + contentLength);
+        frame[0] = (contentLength >> 8) & 0xFF;
+        frame[1] = contentLength & 0xFF;
+        frame[2] = garbageHeader.length;
+        frame.set(garbageHeader, 3);
+
+        expect(() => deframe(frame.buffer)).toThrow('header is not valid JSON');
+    });
+
+    it('should throw for a frame with content-length mismatch', () => {
+        // Create a valid frame then change the content-length prefix
+        const frames = createFileDataFrames(fileBuffer, 'test-file-id');
+        const tamperedFrame = new Uint8Array(frames[0].slice(0));
+        // Set content-length to 0x00 0x01 (way too small for the actual frame)
+        tamperedFrame[0] = 0;
+        tamperedFrame[1] = 1;
+        expect(() => deframe(tamperedFrame.buffer)).toThrow('content-length prefix');
+    });
+
     describe('ReassemblyManager', () => {
         let manager: ReassemblyManager;
 

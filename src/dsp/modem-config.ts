@@ -3,9 +3,9 @@
  *
  * Modem specification:
  *   Modulation:           4-FSK (4 tones, 2 bits per symbol)
- *   Symbol duration:      5 ms  →  200 symbols/sec
+ *   Symbol duration:      10 ms  →  100 symbols/sec
  *   Tones:                ~400, ~800, ~1200, ~1600 Hz
- *   Acoustic throughput:  ~50 bytes/sec (raw 400 bits/sec)
+ *   Acoustic throughput:  ~25 bytes/sec (raw 200 bits/sec)
  *
  * Both TX and RX derive
  *   symbolSamples = Math.round(SYMBOL_DURATION_MS × sampleRate / 1000)
@@ -13,31 +13,37 @@
  * physical tone frequencies (in Hz) regardless of whether the device runs at
  * 44.1 kHz, 48 kHz, or any other standard sample rate.
  *
- * Because SYMBOL_DURATION_MS = 5 ms = 1 / 200 s, and because each k value is
+ * Because SYMBOL_DURATION_MS = 10 ms = 1 / 100 s, and because each k value is
  * chosen so that k full cycles of the tone fit exactly in the symbol window:
  *
- *   k = 2  →  2 × (1000/5) = 400 Hz
- *   k = 4  →  4 × 200     = 800 Hz
- *   k = 6  →  6 × 200     = 1200 Hz
- *   k = 8  →  8 × 200     = 1600 Hz
+ *   k = 4  →  4 × (1000/10) = 400 Hz
+ *   k = 8  →  8 × 100       = 800 Hz
+ *   k = 12 → 12 × 100       = 1200 Hz
+ *   k = 16 → 16 × 100       = 1600 Hz
  *
  * Integer-cycle alignment eliminates spectral leakage and maximises the
- * Goertzel signal-to-noise ratio.
+ * Goertzel signal-to-noise ratio.  Using 10 ms (vs. the previous 5 ms) doubles
+ * the number of samples per Goertzel window, giving roughly 2× better SNR and
+ * dramatically improving tone discrimination on Android devices where hardware
+ * audio processing can distort the signal even when software processing is
+ * disabled via getUserMedia constraints.
  */
 
-/** Real-time duration of one FSK symbol in milliseconds (5 ms = 200 symbols/sec). */
-export const SYMBOL_DURATION_MS = 5;
+/** Real-time duration of one FSK symbol in milliseconds (10 ms = 100 symbols/sec). */
+export const SYMBOL_DURATION_MS = 10;
 
 /**
  * Goertzel frequency bins (k values) for the 4 FSK tones of the DATA channel
  * (sender → receiver).
- * Actual tone Hz = k × (1000 / SYMBOL_DURATION_MS) = k × 200.
+ * Actual tone Hz = k × (1000 / SYMBOL_DURATION_MS) = k × 100.
+ * Frequencies match the previous 5 ms configuration (400, 800, 1200, 1600 Hz);
+ * only k is doubled so that exactly k integer cycles fit in the wider window.
  */
-export const K_VALUES = [2, 4, 6, 8] as const;
+export const K_VALUES = [4, 8, 12, 16] as const;
 
 /**
  * Tone index (into K_VALUES) used for the data-channel preamble.
- * Index 1 → k = 4 → ~800 Hz: above typical low-frequency ambient noise and
+ * Index 1 → k = 8 → ~800 Hz: above typical low-frequency ambient noise and
  * microphone roll-off, yet well within every consumer speaker's passband.
  */
 export const PREAMBLE_TONE = 1;
@@ -50,32 +56,35 @@ export const PREAMBLE_TONE = 1;
  * tones (400–1600 Hz) while remaining within the passband of every consumer
  * speaker and microphone (≤ ~8 kHz):
  *
- *   k = 11 → 11 × 200 = 2200 Hz
- *   k = 13 → 13 × 200 = 2600 Hz
- *   k = 15 → 15 × 200 = 3000 Hz
- *   k = 17 → 17 × 200 = 3400 Hz
+ *   k = 22 → 22 × 100 = 2200 Hz
+ *   k = 26 → 26 × 100 = 2600 Hz
+ *   k = 30 → 30 × 100 = 3000 Hz
+ *   k = 34 → 34 × 100 = 3400 Hz
  *
  * Because the ACK listener on the sender side only looks for tones in this
  * upper band, the sender's own outgoing data transmissions (400–1600 Hz)
  * cannot be misinterpreted as incoming ACKs, eliminating self-reception errors.
+ * k values are doubled relative to the old 5 ms configuration to maintain the
+ * same physical frequencies with the new 10 ms symbol window.
  */
-export const ACK_K_VALUES = [11, 13, 15, 17] as const;
+export const ACK_K_VALUES = [22, 26, 30, 34] as const;
 
 /**
  * Preamble tone index into ACK_K_VALUES.
- * Index 1 → k = 13 → 2600 Hz.
+ * Index 1 → k = 26 → 2600 Hz.
  */
 export const ACK_PREAMBLE_TONE = 1;
 
 /** Number of preamble symbols prepended to every acoustic frame. */
-export const PREAMBLE_SYMBOLS = 16;
+export const PREAMBLE_SYMBOLS = 20;
 
 /**
  * Minimum consecutive preamble-tone symbols required to declare preamble lock.
  * Lower than PREAMBLE_SYMBOLS so that a few leading symbols caught mid-window
- * do not prevent detection.
+ * do not prevent detection.  Raised from 10 to 14 to reduce false triggers
+ * caused by ambient noise bursts on Android devices.
  */
-export const PREAMBLE_MIN_SYMBOLS = 10;
+export const PREAMBLE_MIN_SYMBOLS = 14;
 
 /**
  * Sync byte marking the start of data after the preamble.
@@ -105,6 +114,15 @@ export const TONE_DOMINANCE_RATIO = 0.4;
  * window after the preamble may straddle two different tones and decode to the
  * wrong value.  Allowing a small number of retries (sliding one window forward
  * each time) gives the state machine a chance to find a well-aligned window
- * without throwing away the whole reception attempt.
+ * without throwing away the whole reception attempt.  Raised from 8 to 16 to
+ * tolerate a larger range of clock-alignment offsets before giving up.
  */
-export const SYNC_MAX_RETRIES = 8;
+export const SYNC_MAX_RETRIES = 16;
+
+/**
+ * Maximum allowed Hamming distance between the received sync byte and
+ * SYNC_BYTE.  A value of 1 tolerates single-bit errors in the sync byte
+ * caused by hardware audio processing on Android devices attenuating or
+ * distorting one of the four FSK tones.
+ */
+export const SYNC_HAMMING_TOLERANCE = 1;

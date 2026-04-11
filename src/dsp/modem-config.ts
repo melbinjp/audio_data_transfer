@@ -79,6 +79,23 @@ export const ACK_PREAMBLE_TONE = 1;
 export const PREAMBLE_SYMBOLS = 20;
 
 /**
+ * Number of preamble symbols prepended to every ACK frame (receiver → sender).
+ * Higher than PREAMBLE_SYMBOLS so the sender's ACK listener has more time to
+ * achieve preamble lock before the short ACK payload begins.  Smartphone
+ * speakers may have a slow gain ramp at startup; extra preamble compensates
+ * for the first few attenuated symbols.
+ */
+export const ACK_PREAMBLE_SYMBOLS = 30;
+
+/**
+ * Minimum consecutive preamble-tone symbols required to declare preamble lock
+ * on the ACK back-channel.  Lower than PREAMBLE_MIN_SYMBOLS so that the
+ * sender's listener can lock on even when the first few ACK preamble symbols
+ * are weakened by speaker warm-up or room acoustics.
+ */
+export const ACK_PREAMBLE_MIN_SYMBOLS = 12;
+
+/**
  * Minimum consecutive preamble-tone symbols required to declare preamble lock.
  * Lower than PREAMBLE_SYMBOLS so that a few leading symbols caught mid-window
  * do not prevent detection.  Raised from 14 to 16 to further reduce false

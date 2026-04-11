@@ -39,7 +39,9 @@ import {
     K_VALUES,
     PREAMBLE_TONE,
     PREAMBLE_SYMBOLS,
+    ACK_PREAMBLE_SYMBOLS,
     PREAMBLE_MIN_SYMBOLS,
+    ACK_PREAMBLE_MIN_SYMBOLS,
     SYNC_BYTE,
     GUARD_SYMBOLS,
     SILENCE_THRESHOLD,
@@ -64,6 +66,16 @@ export interface ChannelConfig {
     kValues: readonly number[];
     /** Index into kValues for the preamble tone. */
     preambleTone: number;
+    /**
+     * Number of preamble symbols prepended to every TX frame on this channel.
+     * Defaults to PREAMBLE_SYMBOLS when not set.
+     */
+    preambleSymbols?: number;
+    /**
+     * Minimum consecutive preamble-tone symbols required for preamble lock on
+     * this channel (RX side).  Defaults to PREAMBLE_MIN_SYMBOLS when not set.
+     */
+    preambleMinSymbols?: number;
 }
 
 /** Data channel (sender → receiver): tones at 400, 800, 1200, 1600 Hz. */
@@ -77,10 +89,18 @@ export const DATA_CHANNEL: ChannelConfig = {
  *
  * Using a frequency band completely above the data channel ensures the sender's
  * ACK listener cannot decode its own outgoing data transmissions as ACKs.
+ *
+ * A longer TX preamble (ACK_PREAMBLE_SYMBOLS) gives the sender's listener
+ * more time to achieve lock before the short ACK payload arrives.  A lower
+ * RX preamble-min threshold (ACK_PREAMBLE_MIN_SYMBOLS) makes lock easier to
+ * achieve when the first few symbols are attenuated by smartphone speaker
+ * warm-up or room acoustics.
  */
 export const ACK_CHANNEL: ChannelConfig = {
     kValues: Array.from(ACK_K_VALUES),
     preambleTone: ACK_PREAMBLE_TONE,
+    preambleSymbols: ACK_PREAMBLE_SYMBOLS,
+    preambleMinSymbols: ACK_PREAMBLE_MIN_SYMBOLS,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +157,7 @@ function encodeFrameToAudio(
 ): Float32Array {
     const data = new Uint8Array(frame);
     const { kValues, preambleTone } = channel;
+    const preambleCount = channel.preambleSymbols ?? PREAMBLE_SYMBOLS;
 
     // Pre-synthesise all four tone waveforms once to avoid redundant computation.
     const tones = kValues.map(k => synthesiseTone(k, symbolSamples, sampleRate));
@@ -146,7 +167,7 @@ function encodeFrameToAudio(
     for (const b of data) checksum ^= b;
 
     // Total audio size (GUARD_SYMBOLS tail is zero-filled by Float32Array init).
-    const totalSymbols = PREAMBLE_SYMBOLS + 4 + data.length * 4 + 4 + GUARD_SYMBOLS;
+    const totalSymbols = preambleCount + 4 + data.length * 4 + 4 + GUARD_SYMBOLS;
     const pcm = new Float32Array(totalSymbols * symbolSamples);
     let writePos = 0;
 
@@ -156,7 +177,7 @@ function encodeFrameToAudio(
     };
 
     // 1. Preamble
-    for (let i = 0; i < PREAMBLE_SYMBOLS; i++) writeTone(preambleTone);
+    for (let i = 0; i < preambleCount; i++) writeTone(preambleTone);
 
     // 2. Sync byte
     for (const s of byteToSymbols(SYNC_BYTE)) writeTone(s);
@@ -467,12 +488,13 @@ export async function startListening(
     // ── RX state machine ──────────────────────────────────────────────────────
     //
     // States:
-    //   IDLE      — watching for PREAMBLE_MIN_SYMBOLS consecutive preamble-tone symbols
+    //   IDLE      — watching for preambleMinCount consecutive preamble-tone symbols
     //   SYNC      — reading 4 symbols to decode SYNC_BYTE; mismatches retry up to
     //               SYNC_MAX_RETRIES times before resetting to IDLE
     //   DATA      — decoding data bytes 4-symbols-at-a-time; first 2 bytes give length
     //   CHECKSUM  — reading 4 symbols (1 XOR byte) and verifying; delivers frame on match
     //
+    const preambleMinCount = channel.preambleMinSymbols ?? PREAMBLE_MIN_SYMBOLS;
     type RxState = 'IDLE' | 'SYNC' | 'DATA' | 'CHECKSUM';
     let rxState: RxState = 'IDLE';
     let preambleCount = 0;
@@ -519,7 +541,7 @@ export async function startListening(
             case 'IDLE':
                 if (validTone && toneIndex === preambleTone) {
                     preambleCount++;
-                    if (preambleCount >= PREAMBLE_MIN_SYMBOLS) {
+                    if (preambleCount >= preambleMinCount) {
                         rxState = 'SYNC';
                         symbolAccum = [];
                     }

@@ -22,7 +22,7 @@ describe('Receiver UI', () => {
 
         vi.mocked(startListening).mockImplementation(async (cb) => {
             onFrameCallback = cb as (frame: ArrayBuffer) => void;
-            return { analyser: {} as AnalyserNode, stop: vi.fn() };
+            return { analyser: {} as AnalyserNode, stop: vi.fn(), setRxMuted: vi.fn() };
         });
 
         // TransmitterSession is used by the receiver to send ACKs.

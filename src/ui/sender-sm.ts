@@ -10,6 +10,28 @@ export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
 const ACK_TIMEOUT_MS = 10000;
 /** Maximum number of transmission attempts per frame before aborting. */
 const MAX_RETRIES = 5;
+/**
+ * Base delay before the first retry (ms).  Doubles with each subsequent
+ * attempt (exponential backoff) to give the acoustic environment time to
+ * stabilise after a failed transmission (3C).
+ *
+ * Schedule: attempt 1 → 500 ms, attempt 2 → 1000 ms, attempt 3 → 2000 ms,
+ *           attempt 4 → 4000 ms.
+ */
+const RETRY_BASE_DELAY_MS = 500;
+/**
+ * Guard period inserted after a successful ACK before the next frame is sent
+ * (ms).  Gives the receiver time to finish transmitting its ACK, wait for
+ * speaker ring-down (ACK_RING_DOWN_MS), and return its RX state machine to
+ * IDLE before the next preamble arrives (1D).
+ *
+ * 300 ms leaves comfortable margin: the receiver unmutes roughly 50 ms after
+ * ACK transmission ends (≈ 1.74 s after it started), while the sender starts
+ * the next frame 300 ms after receiving the ACK (also ≈ 1.74 s after the ACK
+ * started).  The 250 ms gap means the receiver is always ready well before
+ * the first preamble symbol hits its microphone.
+ */
+const POST_ACK_GUARD_MS = 300;
 
 /**
  * Sends a file as audio frames using a stop-and-wait ARQ protocol.
@@ -156,6 +178,13 @@ const ANY_FRAME_INDEX = -1;
             // ── Handshake ──────────────────────────────────────────────────────
             let ackStartReceived = false;
             for (let attempt = 0; attempt < MAX_RETRIES && !ackStartReceived; attempt++) {
+                if (attempt > 0) {
+                    // Exponential backoff: wait before retrying so the acoustic
+                    // environment settles (3C).
+                    await new Promise<void>(r =>
+                        setTimeout(r, RETRY_BASE_DELAY_MS * (1 << (attempt - 1))),
+                    );
+                }
                 this.setState(
                     'sending',
                     attempt === 0
@@ -170,6 +199,9 @@ const ANY_FRAME_INDEX = -1;
                 this.setState('error', 'No acknowledgment from receiver. Is the receiver listening?');
                 return;
             }
+            // Guard: let the receiver finish transmitting its ack-start and
+            // return to IDLE before the first data frame's preamble arrives (1D).
+            await new Promise<void>(r => setTimeout(r, POST_ACK_GUARD_MS));
 
             // ── Data frames ────────────────────────────────────────────────────
             // Each chunk is read lazily with File.slice() so that only ~4 KB is
@@ -177,6 +209,12 @@ const ANY_FRAME_INDEX = -1;
             for (let i = 0; i < totalFrames; i++) {
                 let ackReceived = false;
                 for (let attempt = 0; attempt < MAX_RETRIES && !ackReceived; attempt++) {
+                    if (attempt > 0) {
+                        // Exponential backoff between retries (3C).
+                        await new Promise<void>(r =>
+                            setTimeout(r, RETRY_BASE_DELAY_MS * (1 << (attempt - 1))),
+                        );
+                    }
                     this.setState(
                         'sending',
                         attempt === 0
@@ -197,6 +235,12 @@ const ANY_FRAME_INDEX = -1;
                     return;
                 }
                 this.onProgress(i + 1, totalFrames);
+                // Post-ACK guard: give the receiver time to finish playing its
+                // ACK, complete speaker ring-down, and re-enter IDLE before the
+                // next frame's preamble arrives (1D).
+                if (i < totalFrames - 1) {
+                    await new Promise<void>(r => setTimeout(r, POST_ACK_GUARD_MS));
+                }
             }
 
             this.setState('complete', 'File sent successfully.');

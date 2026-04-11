@@ -81,10 +81,11 @@ export const PREAMBLE_SYMBOLS = 20;
 /**
  * Minimum consecutive preamble-tone symbols required to declare preamble lock.
  * Lower than PREAMBLE_SYMBOLS so that a few leading symbols caught mid-window
- * do not prevent detection.  Raised from 10 to 14 to reduce false triggers
- * caused by ambient noise bursts on Android devices.
+ * do not prevent detection.  Raised from 14 to 16 to further reduce false
+ * triggers from ambient noise while still leaving 4 symbols of margin before
+ * the sync byte arrives.
  */
-export const PREAMBLE_MIN_SYMBOLS = 14;
+export const PREAMBLE_MIN_SYMBOLS = 16;
 
 /**
  * Sync byte marking the start of data after the preamble.
@@ -94,7 +95,7 @@ export const PREAMBLE_MIN_SYMBOLS = 14;
 export const SYNC_BYTE = 0xAB;
 
 /** Silent guard symbols appended after each acoustic frame. */
-export const GUARD_SYMBOLS = 8;
+export const GUARD_SYMBOLS = 12;
 
 /** RMS amplitude below this value is classified as silence (no active tone). */
 export const SILENCE_THRESHOLD = 0.005;

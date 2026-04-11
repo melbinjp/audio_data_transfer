@@ -44,6 +44,7 @@ import {
     GUARD_SYMBOLS,
     SILENCE_THRESHOLD,
     TONE_DOMINANCE_RATIO,
+    SYNC_MAX_RETRIES,
     ACK_K_VALUES,
     ACK_PREAMBLE_TONE,
 } from './modem-config';
@@ -414,7 +415,18 @@ export async function startListening(
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
+        // Disable all browser audio-processing pipelines.  Echo cancellation
+        // and noise suppression specifically target the 300–3400 Hz voice band,
+        // which overlaps exactly with the FSK data channel (400–1600 Hz) and
+        // ACK channel (2200–3400 Hz).  Leaving them enabled causes the browser
+        // to attenuate or distort the FSK tones before they reach the Goertzel
+        // detector, producing sync mismatches and failed transfers.
+        audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 1,
+        },
         video: false,
     }).catch(
         (err: unknown) => {
@@ -455,7 +467,8 @@ export async function startListening(
     //
     // States:
     //   IDLE      — watching for PREAMBLE_MIN_SYMBOLS consecutive preamble-tone symbols
-    //   SYNC      — reading 4 symbols to decode SYNC_BYTE; mismatches reset to IDLE
+    //   SYNC      — reading 4 symbols to decode SYNC_BYTE; mismatches retry up to
+    //               SYNC_MAX_RETRIES times before resetting to IDLE
     //   DATA      — decoding data bytes 4-symbols-at-a-time; first 2 bytes give length
     //   CHECKSUM  — reading 4 symbols (1 XOR byte) and verifying; delivers frame on match
     //
@@ -465,6 +478,7 @@ export async function startListening(
     let symbolAccum: number[] = [];  // sub-phase accumulator (max 4 symbols = 1 byte)
     let dataBytes: number[] = [];    // decoded bytes of the current acoustic frame
     let totalExpected = 0;           // total data bytes once the length prefix is known
+    let syncRetryCount = 0;          // consecutive failed sync-byte decode attempts
 
     function resetState() {
         rxState = 'IDLE';
@@ -472,6 +486,7 @@ export async function startListening(
         symbolAccum = [];
         dataBytes = [];
         totalExpected = 0;
+        syncRetryCount = 0;
     }
 
     /** Decode the 4 accumulated symbol indices into one byte and clear the accumulator. */
@@ -503,7 +518,14 @@ export async function startListening(
                 break;
 
             case 'SYNC':
-                if (!validTone) { resetState(); break; }
+                // Actual silence means the transmitter has stopped; reset.
+                if (toneIndex === -1) { resetState(); break; }
+                // Low-dominance non-silence: this window likely straddles the
+                // preamble/sync-byte boundary (mixed samples from two adjacent
+                // symbols).  Skip it and wait for a clean window rather than
+                // hard-resetting to IDLE, which would throw away the preamble
+                // lock we already have.
+                if (!validTone) { break; }
                 // Drain any trailing preamble-tone symbols that arrive after the
                 // state machine transitions to SYNC (which happens after
                 // PREAMBLE_MIN_SYMBOLS, while the transmitter is still sending
@@ -521,17 +543,32 @@ export async function startListening(
                         console.warn(
                             `FSK RX: sync mismatch (got 0x${syncByte.toString(16).toUpperCase()})`,
                         );
-                        resetState();
+                        // Stay in SYNC and retry rather than resetting to IDLE.
+                        // Symbol-clock misalignment means the first window after
+                        // the preamble may be partially misaligned; sliding one
+                        // window forward usually produces a clean decode.
+                        // Only force a full reset after SYNC_MAX_RETRIES attempts.
+                        syncRetryCount++;
+                        if (syncRetryCount >= SYNC_MAX_RETRIES) {
+                            resetState();
+                        }
+                        // symbolAccum is already empty (cleared by flushByte).
                     }
                 }
                 break;
 
             case 'DATA':
-                if (!validTone) {
-                    console.warn('FSK RX: noise during data symbols — discarding frame');
+                // Actual silence mid-frame means the transmitter stopped; discard.
+                if (toneIndex === -1) {
+                    console.warn('FSK RX: silence during data symbols — discarding frame');
                     resetState();
                     break;
                 }
+                // Low-dominance non-silence: use the best available tone rather
+                // than discarding the whole frame.  Once the sync byte has been
+                // decoded the symbol clock is aligned, so low dominance here is
+                // caused by environmental noise rather than window misalignment.
+                // The application-layer CRC32 will catch any resulting bit errors.
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const byte = flushByte();
@@ -551,11 +588,13 @@ export async function startListening(
                 break;
 
             case 'CHECKSUM':
-                if (!validTone) {
-                    console.warn('FSK RX: noise during checksum symbol — discarding frame');
+                // Actual silence mid-checksum means the transmitter stopped; discard.
+                if (toneIndex === -1) {
+                    console.warn('FSK RX: silence during checksum symbol — discarding frame');
                     resetState();
                     break;
                 }
+                // As in DATA, accept the best tone on low dominance; let CRC32 decide.
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const rxChecksum = flushByte();

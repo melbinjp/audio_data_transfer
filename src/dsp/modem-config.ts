@@ -96,3 +96,15 @@ export const SILENCE_THRESHOLD = 0.005;
  * Pure sine → ratio ≈ 1.0; flat noise → ratio ≈ 0.25 (one of four equal bins).
  */
 export const TONE_DOMINANCE_RATIO = 0.4;
+
+/**
+ * Maximum number of consecutive sync-byte decode attempts before the receiver
+ * abandons the current preamble and returns to IDLE to hunt for a new one.
+ *
+ * Due to symbol-clock misalignment between transmitter and receiver, the first
+ * window after the preamble may straddle two different tones and decode to the
+ * wrong value.  Allowing a small number of retries (sliding one window forward
+ * each time) gives the state machine a chance to find a well-aligned window
+ * without throwing away the whole reception attempt.
+ */
+export const SYNC_MAX_RETRIES = 8;

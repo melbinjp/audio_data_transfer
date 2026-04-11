@@ -45,6 +45,7 @@ import {
     SILENCE_THRESHOLD,
     TONE_DOMINANCE_RATIO,
     SYNC_MAX_RETRIES,
+    SYNC_HAMMING_TOLERANCE,
     ACK_K_VALUES,
     ACK_PREAMBLE_TONE,
 } from './modem-config';
@@ -497,6 +498,14 @@ export async function startListening(
         return b & 0xFF;
     }
 
+    /** Count the number of differing bits between two bytes (Hamming distance). */
+    function hammingDistance(a: number, b: number): number {
+        let diff = (a ^ b) & 0xFF;
+        let count = 0;
+        while (diff !== 0) { count += diff & 1; diff >>>= 1; }
+        return count;
+    }
+
     rxNode.port.onmessage = (event) => {
         const msg = event.data as { type: string; toneIndex: number; dominance: number };
         if (msg.type !== 'symbol') return;
@@ -535,7 +544,7 @@ export async function startListening(
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const syncByte = flushByte();
-                    if (syncByte === SYNC_BYTE) {
+                    if (hammingDistance(syncByte, SYNC_BYTE) <= SYNC_HAMMING_TOLERANCE) {
                         rxState = 'DATA';
                         dataBytes = [];
                         totalExpected = 0;

@@ -1,5 +1,5 @@
 import { TransmitterSession, startListening, ACK_CHANNEL } from '../dsp/fsk-modem';
-import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame, deframe } from '../transport/framing';
+import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame, getAckToken, parseCompactAck } from '../transport/framing';
 
 /**
  * Defines the possible states of the sender state machine.
@@ -9,7 +9,7 @@ export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
 /** How long the sender waits for an ACK before retrying a frame (ms). */
 const ACK_TIMEOUT_MS = 10000;
 /** Maximum number of transmission attempts per frame before aborting. */
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5;
 
 /**
  * Sends a file as audio frames using a stop-and-wait ARQ protocol.
@@ -105,13 +105,19 @@ export class SenderSM {
             // this band does not overlap the data channel (400–1600 Hz), the
             // sender's own outgoing transmissions will never be mistaken for
             // incoming ACKs by the Goertzel detector.
+            // Compact ACK frames use abbreviated JSON keys and a 6-char session
+            // token instead of the full UUID, reducing transmission time from
+            // ~3.5 seconds to ~1.4 seconds.
+            const ackToken = getAckToken(this.fileId);
             const { stop } = await startListening((rawFrame) => {
                 try {
-                    const { header } = deframe(rawFrame);
-                    if (header.fileId !== this.fileId || !pendingWaiter) return;
+                    const ack = parseCompactAck(rawFrame);
+                    if (!ack || ack.token !== ackToken || !pendingWaiter) return;
                     const w = pendingWaiter;
-                    const frameMatches = w.frameIndex === ANY_FRAME_INDEX || header.frameIndex === w.frameIndex;
-                    if (header.type === w.type && frameMatches) {
+                    const frameMatches =
+                        w.frameIndex === ANY_FRAME_INDEX ||
+                        ack.frameIndex === w.frameIndex;
+                    if (ack.type === w.type && frameMatches) {
                         clearTimeout(w.timer);
                         pendingWaiter = null;
                         w.resolve(true);

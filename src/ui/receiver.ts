@@ -1,5 +1,5 @@
 import { startListening, primeAudio, TransmitterSession, ACK_CHANNEL } from '../dsp/fsk-modem';
-import { deframe, ReassemblyManager, createAckFrame, createAckStartFrame } from '../transport/framing';
+import { deframe, ReassemblyManager, createCompactAckFrame, createCompactAckStartFrame } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 
 /**
@@ -84,7 +84,7 @@ export function initializeReceiver() {
                         case 'file-start': {
                             reassemblyManager!.getReassembler(header);
                             statusEl.textContent = `Receiving file: ${header.fileName}`;
-                            sendAck(createAckStartFrame(header.fileId));
+                            sendAck(createCompactAckStartFrame(header.fileId));
                             break;
                         }
                         case 'file-data': {
@@ -93,7 +93,7 @@ export function initializeReceiver() {
                             receiveProgress.value = header.frameIndex! + 1;
 
                             const file = reassemblyManager!.processFrame(header, payload);
-                            sendAck(createAckFrame(header.fileId, header.frameIndex!));
+                            sendAck(createCompactAckFrame(header.fileId, header.frameIndex!));
 
                             if (file) {
                                 statusEl.textContent = `File "${file.name}" received!`;

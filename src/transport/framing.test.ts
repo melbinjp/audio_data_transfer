@@ -6,7 +6,11 @@ import {
     FrameHeader,
     createFileStartFrame,
     createAckFrame,
-    createAckStartFrame
+    createAckStartFrame,
+    createCompactAckFrame,
+    createCompactAckStartFrame,
+    parseCompactAck,
+    getAckToken,
 } from './framing';
 import CRC32 from 'crc-32';
 
@@ -83,6 +87,62 @@ describe('framing', () => {
         expect(header.type).toBe('ack-start');
         expect(header.fileId).toBe('test-file-id');
         expect(payload.byteLength).toBe(0);
+    });
+
+    describe('compact ACK protocol', () => {
+        it('getAckToken should return a 6-char lowercase hex string', () => {
+            const token = getAckToken('15d5f581-f912-4472-b3ec-0eb972fc6829');
+            expect(token).toBe('15d5f5');
+            expect(token).toMatch(/^[0-9a-f]{6}$/);
+        });
+
+        it('should create and parse a compact ack-start frame', () => {
+            const fileId = '15d5f581-f912-4472-b3ec-0eb972fc6829';
+            const frame = createCompactAckStartFrame(fileId);
+            const ack = parseCompactAck(frame);
+
+            expect(ack).not.toBeNull();
+            expect(ack!.type).toBe('ack-start');
+            expect(ack!.token).toBe('15d5f5');
+            expect(ack!.frameIndex).toBeUndefined();
+        });
+
+        it('should create and parse a compact ack frame', () => {
+            const fileId = '15d5f581-f912-4472-b3ec-0eb972fc6829';
+            const frame = createCompactAckFrame(fileId, 42);
+            const ack = parseCompactAck(frame);
+
+            expect(ack).not.toBeNull();
+            expect(ack!.type).toBe('ack');
+            expect(ack!.token).toBe('15d5f5');
+            expect(ack!.frameIndex).toBe(42);
+        });
+
+        it('compact ack frame should be significantly smaller than full ack frame', () => {
+            const fileId = '15d5f581-f912-4472-b3ec-0eb972fc6829';
+            const compact = createCompactAckFrame(fileId, 0);
+            const full = createAckFrame(fileId, 0);
+            // Compact frame must be at least 40 bytes smaller (roughly half the size).
+            expect(compact.byteLength).toBeLessThan(full.byteLength - 40);
+        });
+
+        it('parseCompactAck should return null for a non-compact (full) ack frame', () => {
+            const frame = createAckFrame('test-file-id', 5);
+            // Full ACK frames use key names "type"/"fileId"/"frameIndex", not "t"/"f"/"i".
+            expect(parseCompactAck(frame)).toBeNull();
+        });
+
+        it('parseCompactAck should return null for garbage input', () => {
+            expect(parseCompactAck(new ArrayBuffer(0))).toBeNull();
+            expect(parseCompactAck(new Uint8Array([0, 1, 0, 0, 0]).buffer)).toBeNull();
+        });
+
+        it('token from same fileId should match', () => {
+            const fileId = 'abcdef12-0000-0000-0000-000000000000';
+            const frame = createCompactAckFrame(fileId, 7);
+            const ack = parseCompactAck(frame)!;
+            expect(ack.token).toBe(getAckToken(fileId));
+        });
     });
 
     it('should throw an error for a frame with a CRC mismatch', async () => {

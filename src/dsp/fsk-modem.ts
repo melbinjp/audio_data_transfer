@@ -480,6 +480,7 @@ export async function startListening(
     let dataBytes: number[] = [];    // decoded bytes of the current acoustic frame
     let totalExpected = 0;           // total data bytes once the length prefix is known
     let syncRetryCount = 0;          // consecutive failed sync-byte decode attempts
+    let syncHammingCorrected = false; // true when the sync byte was accepted via Hamming tolerance
 
     function resetState() {
         rxState = 'IDLE';
@@ -488,6 +489,7 @@ export async function startListening(
         dataBytes = [];
         totalExpected = 0;
         syncRetryCount = 0;
+        syncHammingCorrected = false;
     }
 
     /** Decode the 4 accumulated symbol indices into one byte and clear the accumulator. */
@@ -507,7 +509,7 @@ export async function startListening(
     }
 
     rxNode.port.onmessage = (event) => {
-        const msg = event.data as { type: string; toneIndex: number; dominance: number };
+        const msg = event.data as { type: string; toneIndex: number; rms: number; dominance: number };
         if (msg.type !== 'symbol') return;
 
         const { toneIndex, dominance } = msg;
@@ -545,6 +547,13 @@ export async function startListening(
                 if (symbolAccum.length === 4) {
                     const syncByte = flushByte();
                     if (hammingDistance(syncByte, SYNC_BYTE) <= SYNC_HAMMING_TOLERANCE) {
+                        // Track whether the last sync symbol was wrong (δ > N/2 misalignment).
+                        // SYNC_BYTE = 0xAB → last 2-bit symbol = SYNC_BYTE & 0x3 = 3 (tone 3).
+                        // When the symbol window straddles the preamble/sync-byte boundary at
+                        // δ > N/2, the last sync symbol is contaminated by the previous symbol
+                        // and decodes to the wrong tone.  One extra window skip in DATA state
+                        // corrects the clock offset that this creates.
+                        syncHammingCorrected = (syncByte & 0x3) !== (SYNC_BYTE & 0x3);
                         rxState = 'DATA';
                         dataBytes = [];
                         totalExpected = 0;
@@ -573,6 +582,14 @@ export async function startListening(
                     resetState();
                     break;
                 }
+                // When the sync byte was accepted via Hamming tolerance, the last
+                // sync symbol was contaminated by ISI (symbol-clock offset δ > N/2).
+                // Consuming one extra window here lets the clock resync before
+                // collecting data symbols, preventing a corrupted content-length read.
+                if (syncHammingCorrected) {
+                    syncHammingCorrected = false;
+                    break;
+                }
                 // Low-dominance non-silence: use the best available tone rather
                 // than discarding the whole frame.  Once the sync byte has been
                 // decoded the symbol clock is aligned, so low dominance here is
@@ -586,7 +603,20 @@ export async function startListening(
                     // After the first 2 bytes we know the total application frame length.
                     if (dataBytes.length === 2 && totalExpected === 0) {
                         const contentLength = (dataBytes[0] << 8) | dataBytes[1];
-                        totalExpected = 2 + contentLength;
+                        // Maximum valid content: 1-byte header-length + up to 255 header
+                        // bytes + up to PAYLOAD_SIZE (256) payload bytes = 512.
+                        // A decoded length above this cap means bytes 0–1 were corrupted
+                        // by ISI or noise; discard the frame immediately rather than
+                        // spending seconds reading silence as data.
+                        const MAX_CONTENT_LENGTH = 512;
+                        if (contentLength === 0 || contentLength > MAX_CONTENT_LENGTH) {
+                            console.warn(
+                                `FSK RX: implausible content length ${contentLength} — discarding frame`,
+                            );
+                            resetState();
+                        } else {
+                            totalExpected = 2 + contentLength;
+                        }
                     }
 
                     if (totalExpected > 0 && dataBytes.length === totalExpected) {
@@ -610,19 +640,26 @@ export async function startListening(
                     let expectedChecksum = 0;
                     for (const b of dataBytes) expectedChecksum ^= b;
 
-                    if (rxChecksum === (expectedChecksum & 0xFF)) {
-                        const frameBuf = new Uint8Array(dataBytes).buffer;
-                        try {
-                            onData(frameBuf);
-                        } catch (err) {
-                            console.error('FSK RX: onData callback threw:', err);
-                        }
-                    } else {
+                    if (rxChecksum !== (expectedChecksum & 0xFF)) {
+                        // Acoustic XOR checksum failed.  The most common cause is
+                        // symbol-window misalignment at the end of the frame (the last
+                        // few Goertzel windows straddle the checksum/guard boundary and
+                        // decode as tone 0).  Log the discrepancy but still pass the
+                        // frame to the application-layer CRC32 check: if the data bytes
+                        // were received correctly the CRC32 will confirm it; if they
+                        // were not, the CRC32 will reject the frame.
                         console.warn(
                             `FSK RX: checksum mismatch ` +
                             `(expected 0x${(expectedChecksum & 0xFF).toString(16).toUpperCase()}, ` +
-                            `got 0x${rxChecksum.toString(16).toUpperCase()})`,
+                            `got 0x${rxChecksum.toString(16).toUpperCase()}) — ` +
+                            `deferring to CRC32`,
                         );
+                    }
+                    const frameBuf = new Uint8Array(dataBytes).buffer;
+                    try {
+                        onData(frameBuf);
+                    } catch (err) {
+                        console.error('FSK RX: onData callback threw:', err);
                     }
                     resetState();
                 }

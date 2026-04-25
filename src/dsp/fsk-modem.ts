@@ -225,10 +225,12 @@ class FskRxProcessor extends AudioWorkletProcessor {
     super();
     var opts = (options && options.processorOptions) || {};
     this._N    = opts.symbolSamples    || 240;
+    this._step = Math.max(1, Math.floor(this._N / 4));
     this._kv   = opts.kValues          || [2, 4, 6, 8];
     this._silT = opts.silenceThreshold || 0.005;
     this._buf  = new Float32Array(0);
     this._run  = true;
+    this._seq  = 0;
     var self = this;
     this.port.onmessage = function(e) { if (e.data === 'stop') self._run = false; };
   }
@@ -271,7 +273,7 @@ class FskRxProcessor extends AudioWorkletProcessor {
       var rms = Math.sqrt(sumSq / sym.length);
 
       if (rms < this._silT) {
-        this.port.postMessage({ type: 'symbol', toneIndex: -1, rms: rms, dominance: 0 });
+        this.port.postMessage({ type: 'symbol', seq: this._seq, toneIndex: -1, rms: rms, dominance: 0 });
       } else {
         /* Goertzel energy for each of the four tones. */
         var energies = [];
@@ -285,11 +287,12 @@ class FskRxProcessor extends AudioWorkletProcessor {
           if (energies[j] > maxE) { maxE = energies[j]; best = j; }
         }
         var dom = total > 0.0 ? maxE / total : 0.0;
-        this.port.postMessage({ type: 'symbol', toneIndex: best, rms: rms, dominance: dom });
+        this.port.postMessage({ type: 'symbol', seq: this._seq, toneIndex: best, rms: rms, dominance: dom });
       }
 
-      /* Advance buffer by one symbol. */
-      this._buf = this._buf.slice(this._N);
+      /* Advance buffer by one step (overlapping windows). */
+      this._seq++;
+      this._buf = this._buf.slice(this._step);
     }
 
     return true;
@@ -490,8 +493,7 @@ export async function startListening(
     //
     // States:
     //   IDLE      — watching for preambleMinCount consecutive preamble-tone symbols
-    //   SYNC      — reading 4 symbols to decode SYNC_BYTE; mismatches retry up to
-    //               SYNC_MAX_RETRIES times before resetting to IDLE
+    //   SYNC      — reading 4 symbols to decode SYNC_BYTE
     //   DATA      — decoding data bytes 4-symbols-at-a-time; first 2 bytes give length
     //   CHECKSUM  — reading 4 symbols (1 XOR byte) and verifying; delivers frame on match
     //
@@ -502,18 +504,13 @@ export async function startListening(
     let symbolAccum: number[] = [];  // sub-phase accumulator (max 4 symbols = 1 byte)
     let dataBytes: number[] = [];    // decoded bytes of the current acoustic frame
     let totalExpected = 0;           // total data bytes once the length prefix is known
-    let syncRetryCount = 0;          // consecutive failed sync-byte decode attempts
-    let syncHammingCorrected = false; // true when the sync byte was accepted via Hamming tolerance
-
-    // ── RX mute gate ─────────────────────────────────────────────────────────
-    // When the receiver is transmitting an ACK, its own speaker output is picked
-    // up by the microphone.  Even though the ACK channel (2200–3400 Hz) does not
-    // overlap the data channel (400–1600 Hz), speaker distortion, room reverb,
-    // and microphone non-linearities bleed energy across bands.  Muting the RX
-    // state machine during ACK transmission (and for a short ring-down period
-    // afterward) prevents this self-interference from corrupting preamble lock
-    // on the next incoming data frame (1C).
+    let syncRetryCount = 0;          // fallback retry counter
     let rxMuted = false;
+
+    // ── PLL state ─────────────────────────────────────────────────────────────
+    // We receive 4 micro-symbols per nominal symbol duration.
+    let microBuffer: { seq: number; toneIndex: number; dominance: number }[] = [];
+    let nextSymbolSeq = 0; // Sequence number of the next expected symbol center
 
     function resetState() {
         rxState = 'IDLE';
@@ -522,7 +519,8 @@ export async function startListening(
         dataBytes = [];
         totalExpected = 0;
         syncRetryCount = 0;
-        syncHammingCorrected = false;
+        // Do not clear microBuffer or nextSymbolSeq here so the PLL can establish
+        // a fresh lock based on continuous sequence numbers.
     }
 
     /** Decode the 4 accumulated symbol indices into one byte and clear the accumulator. */
@@ -541,120 +539,54 @@ export async function startListening(
         return count;
     }
 
-    rxNode.port.onmessage = (event) => {
-        const msg = event.data as { type: string; toneIndex: number; rms: number; dominance: number };
-        if (msg.type !== 'symbol') return;
-
-        // Discard all symbols while muted (e.g. during ACK transmission and
-        // speaker ring-down).  This prevents the receiver's own acoustic output
-        // from being mistaken for an incoming preamble or data byte.
-        if (rxMuted) return;
-
-        const { toneIndex, dominance } = msg;
+    function processSymbol(toneIndex: number, dominance: number) {
         const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
 
         switch (rxState) {
             case 'IDLE':
-                if (validTone && toneIndex === preambleTone) {
-                    preambleCount++;
-                    if (preambleCount >= preambleMinCount) {
-                        rxState = 'SYNC';
-                        symbolAccum = [];
-                    }
-                } else {
-                    // Leaky-bucket: subtract PREAMBLE_MISS_COST rather than
-                    // resetting to 0.  Brief noise bursts (e.g. reverb after ACK
-                    // ring-down) reduce progress by at most a few credits instead
-                    // of wiping out all accumulated preamble lock (2B).
-                    preambleCount = Math.max(0, preambleCount - PREAMBLE_MISS_COST);
-                }
+                // Handled externally during PLL lock phase.
                 break;
 
             case 'SYNC':
-                // Actual silence means the transmitter has stopped; reset.
                 if (toneIndex === -1) { resetState(); break; }
-                // Low-dominance non-silence: this window likely straddles the
-                // preamble/sync-byte boundary (mixed samples from two adjacent
-                // symbols).  Skip it and wait for a clean window rather than
-                // hard-resetting to IDLE, which would throw away the preamble
-                // lock we already have.
                 if (!validTone) { break; }
-                // Drain any trailing preamble-tone symbols that arrive after the
-                // state machine transitions to SYNC (which happens after
-                // PREAMBLE_MIN_SYMBOLS, while the transmitter is still sending
-                // all PREAMBLE_SYMBOLS).  Only start accumulating sync-byte
-                // symbols once we see a non-preamble tone.
+                // Drain any trailing preamble symbols that arrive after locking
                 if (toneIndex === preambleTone && symbolAccum.length === 0) { break; }
+                
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const syncByte = flushByte();
                     if (hammingDistance(syncByte, SYNC_BYTE) <= SYNC_HAMMING_TOLERANCE) {
-                        // Track whether the last sync symbol was wrong (δ > N/2 misalignment).
-                        // SYNC_BYTE = 0xAB → last 2-bit symbol = SYNC_BYTE & 0x3 = 3 (tone 3).
-                        // When the symbol window straddles the preamble/sync-byte boundary at
-                        // δ > N/2, the last sync symbol is contaminated by the previous symbol
-                        // and decodes to the wrong tone.  One extra window skip in DATA state
-                        // corrects the clock offset that this creates.
-                        syncHammingCorrected = (syncByte & 0x3) !== (SYNC_BYTE & 0x3);
                         rxState = 'DATA';
                         dataBytes = [];
                         totalExpected = 0;
                     } else {
-                        console.warn(
-                            `FSK RX: sync mismatch (got 0x${syncByte.toString(16).toUpperCase()})`,
-                        );
-                        // Stay in SYNC and retry rather than resetting to IDLE.
-                        // Symbol-clock misalignment means the first window after
-                        // the preamble may be partially misaligned; sliding one
-                        // window forward usually produces a clean decode.
-                        // Only force a full reset after SYNC_MAX_RETRIES attempts.
+                        console.warn(`FSK RX: sync mismatch (got 0x${syncByte.toString(16).toUpperCase()})`);
                         syncRetryCount++;
                         if (syncRetryCount >= SYNC_MAX_RETRIES) {
                             resetState();
                         }
-                        // symbolAccum is already empty (cleared by flushByte).
                     }
                 }
                 break;
 
             case 'DATA':
-                // Actual silence mid-frame means the transmitter stopped; discard.
                 if (toneIndex === -1) {
                     console.warn('FSK RX: silence during data symbols — discarding frame');
                     resetState();
                     break;
                 }
-                // When the sync byte was accepted via Hamming tolerance, the last
-                // sync symbol was contaminated by ISI (symbol-clock offset δ > N/2).
-                // Consuming one extra window here lets the clock resync before
-                // collecting data symbols, preventing a corrupted content-length read.
-                if (syncHammingCorrected) {
-                    syncHammingCorrected = false;
-                    break;
-                }
-                // Low-dominance non-silence: use the best available tone rather
-                // than discarding the whole frame.  Once the sync byte has been
-                // decoded the symbol clock is aligned, so low dominance here is
-                // caused by environmental noise rather than window misalignment.
-                // The application-layer CRC32 will catch any resulting bit errors.
+                
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const byte = flushByte();
                     dataBytes.push(byte);
 
-                    // After the first 2 bytes we know the total application frame length.
                     if (dataBytes.length === 2 && totalExpected === 0) {
                         const contentLength = (dataBytes[0] << 8) | dataBytes[1];
-                        // Maximum valid content: 1-byte header-length + up to 255 header
-                        // bytes + up to PAYLOAD_SIZE (256) payload bytes = 512.
-                        // A decoded length above this cap means bytes 0–1 were corrupted
-                        // by ISI or noise; discard the frame immediately rather than
-                        // spending seconds reading silence as data.
                         const MAX_CONTENT_LENGTH = 512;
                         if (contentLength === 0 || contentLength > MAX_CONTENT_LENGTH) {
-                            console.warn(
-                                `FSK RX: implausible content length ${contentLength} — discarding frame`,
-                            );
+                            console.warn(`FSK RX: implausible content length ${contentLength} — discarding frame`);
                             resetState();
                         } else {
                             totalExpected = 2 + contentLength;
@@ -669,13 +601,12 @@ export async function startListening(
                 break;
 
             case 'CHECKSUM':
-                // Actual silence mid-checksum means the transmitter stopped; discard.
                 if (toneIndex === -1) {
                     console.warn('FSK RX: silence during checksum symbol — discarding frame');
                     resetState();
                     break;
                 }
-                // As in DATA, accept the best tone on low dominance; let CRC32 decide.
+                
                 symbolAccum.push(toneIndex);
                 if (symbolAccum.length === 4) {
                     const rxChecksum = flushByte();
@@ -683,18 +614,10 @@ export async function startListening(
                     for (const b of dataBytes) expectedChecksum ^= b;
 
                     if (rxChecksum !== (expectedChecksum & 0xFF)) {
-                        // Acoustic XOR checksum failed.  The most common cause is
-                        // symbol-window misalignment at the end of the frame (the last
-                        // few Goertzel windows straddle the checksum/guard boundary and
-                        // decode as tone 0).  Log the discrepancy but still pass the
-                        // frame to the application-layer CRC32 check: if the data bytes
-                        // were received correctly the CRC32 will confirm it; if they
-                        // were not, the CRC32 will reject the frame.
                         console.warn(
                             `FSK RX: checksum mismatch ` +
                             `(expected 0x${(expectedChecksum & 0xFF).toString(16).toUpperCase()}, ` +
-                            `got 0x${rxChecksum.toString(16).toUpperCase()}) — ` +
-                            `deferring to CRC32`,
+                            `got 0x${rxChecksum.toString(16).toUpperCase()}) — deferring to CRC32`
                         );
                     }
                     const frameBuf = new Uint8Array(dataBytes).buffer;
@@ -706,6 +629,69 @@ export async function startListening(
                     resetState();
                 }
                 break;
+        }
+    }
+
+    rxNode.port.onmessage = (event) => {
+        const msg = event.data as { type: string; seq: number; toneIndex: number; rms: number; dominance: number };
+        if (msg.type !== 'symbol') return;
+        if (rxMuted) return;
+
+        microBuffer.push({ seq: msg.seq, toneIndex: msg.toneIndex, dominance: msg.dominance });
+        // Keep a short history for early-late comparison and lock detection
+        if (microBuffer.length > 16) microBuffer.shift();
+
+        if (rxState === 'IDLE') {
+            const validTone = msg.toneIndex >= 0 && msg.dominance >= TONE_DOMINANCE_RATIO;
+            if (validTone && msg.toneIndex === preambleTone) {
+                // Since we step at 4x rate, each step is worth 0.25 of a nominal symbol
+                preambleCount += 0.25;
+                if (preambleCount >= preambleMinCount) {
+                    // Lock the PLL onto the best phase among the last 4 micro-symbols
+                    let bestDom = -1;
+                    let bestSeq = msg.seq;
+                    for (let i = 0; i < 4; i++) {
+                        const s = microBuffer[microBuffer.length - 1 - i];
+                        if (s && s.dominance > bestDom) {
+                            bestDom = s.dominance;
+                            bestSeq = s.seq;
+                        }
+                    }
+                    // The next expected center is exactly 4 steps away from the historical best
+                    nextSymbolSeq = bestSeq + 4;
+                    while (nextSymbolSeq <= msg.seq) nextSymbolSeq += 4;
+
+                    rxState = 'SYNC';
+                    symbolAccum = [];
+                }
+            } else {
+                preambleCount = Math.max(0, preambleCount - PREAMBLE_MISS_COST * 0.25);
+            }
+            return;
+        }
+
+        // PLL Tracking & Sampling (SYNC, DATA, CHECKSUM)
+        const centerIndex = microBuffer.findIndex(s => s.seq === nextSymbolSeq);
+        // We wait until we have at least one sample AFTER the center sample (for 'late' comparison)
+        if (centerIndex !== -1 && centerIndex < microBuffer.length - 1) {
+            const centerSample = microBuffer[centerIndex];
+            const earlySample = centerIndex > 0 ? microBuffer[centerIndex - 1] : centerSample;
+            const lateSample = microBuffer[centerIndex + 1];
+
+            // Early-Late Gate clock recovery
+            if (centerSample.dominance >= TONE_DOMINANCE_RATIO) {
+                if (earlySample.dominance > lateSample.dominance + 0.2) {
+                    nextSymbolSeq += 3; // Clock drifted early, shift sampling point backwards
+                } else if (lateSample.dominance > earlySample.dominance + 0.2) {
+                    nextSymbolSeq += 5; // Clock drifted late, shift sampling point forwards
+                } else {
+                    nextSymbolSeq += 4;
+                }
+            } else {
+                nextSymbolSeq += 4;
+            }
+
+            processSymbol(centerSample.toneIndex, centerSample.dominance);
         }
     };
 

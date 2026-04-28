@@ -1,4 +1,4 @@
-/**
+﻿/**
  * From-scratch 4-FSK audio modem.
  *
  * Exports the same public interface as the replaced quiet-modem.ts
@@ -408,6 +408,244 @@ export class TransmitterSession {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FskDecoder — pure, testable RX state machine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Goertzel algorithm — computes energy at a single frequency bin k.
+ * Identical to the AudioWorklet implementation but expressed as plain TypeScript
+ * so it can run in Node.js (vitest) without any browser APIs.
+ */
+function goertzel(buf: Float32Array, k: number): number {
+    const N = buf.length;
+    const coeff = 2.0 * Math.cos((2.0 * Math.PI * k) / N);
+    let q1 = 0.0, q2 = 0.0;
+    for (let i = 0; i < N; i++) {
+        const q0 = buf[i] + coeff * q1 - q2;
+        q2 = q1;
+        q1 = q0;
+    }
+    return q1 * q1 + q2 * q2 - coeff * q1 * q2;
+}
+
+/**
+ * Standalone 4-FSK RX decoder.
+ *
+ * Feed raw PCM via `pushSamples()`.  Runs the same sliding-window Goertzel
+ * detector and PLL-assisted state machine as the AudioWorklet receiver, but
+ * entirely in synchronous TypeScript — no browser APIs required.
+ *
+ * This makes the modem testable headlessly in vitest / Node.js:
+ *   encodeFrameToAudio(frame) → pcm → decoder.pushSamples(pcm) → onData(frame)
+ */
+export class FskDecoder {
+    private readonly kValues: readonly number[];
+    private readonly preambleTone: number;
+    private readonly preambleMinCount: number;
+    private readonly onData: (data: ArrayBuffer) => void;
+    private readonly symbolSamples: number;
+    private readonly step: number;
+    private readonly silenceThreshold: number;
+
+    private buf: Float32Array = new Float32Array(0);
+    private seq = 0;
+
+    private rxState: 'IDLE' | 'SYNC' | 'DATA' | 'CHECKSUM' = 'IDLE';
+    private preambleCount = 0;
+    private symbolAccum: number[] = [];
+    private dataBytes: number[] = [];
+    private totalExpected = 0;
+    private syncRetryCount = 0;
+    private rxMuted = false;
+
+    private microBuffer: { seq: number; toneIndex: number; dominance: number }[] = [];
+    private nextSymbolSeq = 0;
+
+    constructor(opts: {
+        sampleRate: number;
+        channel?: ChannelConfig;
+        onData: (data: ArrayBuffer) => void;
+        silenceThreshold?: number;
+    }) {
+        const channel = opts.channel ?? DATA_CHANNEL;
+        this.kValues = channel.kValues;
+        this.preambleTone = channel.preambleTone;
+        this.preambleMinCount = channel.preambleMinSymbols ?? PREAMBLE_MIN_SYMBOLS;
+        this.onData = opts.onData;
+        this.symbolSamples = getSymbolSamples(opts.sampleRate);
+        this.step = Math.max(1, Math.floor(this.symbolSamples / 4));
+        this.silenceThreshold = opts.silenceThreshold ?? SILENCE_THRESHOLD;
+    }
+
+    /** Push a chunk of raw PCM samples. Can be called repeatedly. */
+    pushSamples(samples: Float32Array): void {
+        const merged = new Float32Array(this.buf.length + samples.length);
+        merged.set(this.buf);
+        merged.set(samples, this.buf.length);
+        this.buf = merged;
+
+        while (this.buf.length >= this.symbolSamples) {
+            const sym = this.buf.subarray(0, this.symbolSamples);
+
+            let sumSq = 0;
+            for (let i = 0; i < sym.length; i++) sumSq += sym[i] * sym[i];
+            const rms = Math.sqrt(sumSq / sym.length);
+
+            let toneIndex: number, dominance: number;
+            if (rms < this.silenceThreshold) {
+                toneIndex = -1; dominance = 0;
+            } else {
+                const energies = Array.from(this.kValues).map(k => goertzel(sym, k));
+                const total = energies.reduce((a, b) => a + b, 0);
+                let maxE = -1, best = 0;
+                for (let j = 0; j < energies.length; j++) {
+                    if (energies[j] > maxE) { maxE = energies[j]; best = j; }
+                }
+                toneIndex = best;
+                dominance = total > 0 ? maxE / total : 0;
+            }
+
+            this._handleSymbolMsg(this.seq, toneIndex, dominance);
+            this.seq++;
+            this.buf = this.buf.slice(this.step);
+        }
+    }
+
+    /** Mutes/unmutes the state machine (call during ACK TX to prevent self-decode). */
+    setMuted(muted: boolean): void {
+        if (muted && !this.rxMuted) this._resetState();
+        this.rxMuted = muted;
+    }
+
+    /**
+     * Process one symbol event. Called from `pushSamples` (test/headless path)
+     * or from the AudioWorklet `onmessage` handler (live browser path).
+     * @internal
+     */
+    _handleSymbolMsg(seq: number, toneIndex: number, dominance: number): void {
+        if (this.rxMuted) return;
+
+        this.microBuffer.push({ seq, toneIndex, dominance });
+        if (this.microBuffer.length > 16) this.microBuffer.shift();
+
+        if (this.rxState === 'IDLE') {
+            const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
+            if (validTone && toneIndex === this.preambleTone) {
+                this.preambleCount += 0.25;
+                if (this.preambleCount >= this.preambleMinCount) {
+                    let bestDom = -1, bestSeq = seq;
+                    for (let i = 0; i < 4; i++) {
+                        const s = this.microBuffer[this.microBuffer.length - 1 - i];
+                        if (s && s.dominance > bestDom) { bestDom = s.dominance; bestSeq = s.seq; }
+                    }
+                    this.nextSymbolSeq = bestSeq + 4;
+                    while (this.nextSymbolSeq <= seq) this.nextSymbolSeq += 4;
+                    this.rxState = 'SYNC';
+                    this.symbolAccum = [];
+                }
+            } else {
+                this.preambleCount = Math.max(0, this.preambleCount - PREAMBLE_MISS_COST * 0.25);
+            }
+            return;
+        }
+
+        // PLL tracking (SYNC / DATA / CHECKSUM)
+        const ci = this.microBuffer.findIndex(s => s.seq === this.nextSymbolSeq);
+        if (ci !== -1 && ci < this.microBuffer.length - 1) {
+            const center = this.microBuffer[ci];
+            const early  = ci > 0 ? this.microBuffer[ci - 1] : center;
+            const late   = this.microBuffer[ci + 1];
+
+            if (center.dominance >= TONE_DOMINANCE_RATIO) {
+                if (early.dominance > late.dominance + 0.2)      this.nextSymbolSeq += 3;
+                else if (late.dominance > early.dominance + 0.2) this.nextSymbolSeq += 5;
+                else                                              this.nextSymbolSeq += 4;
+            } else {
+                this.nextSymbolSeq += 4;
+            }
+            this._processSymbol(center.toneIndex, center.dominance);
+        }
+    }
+
+    private _resetState(): void {
+        this.rxState = 'IDLE';
+        this.preambleCount = 0;
+        this.symbolAccum = [];
+        this.dataBytes = [];
+        this.totalExpected = 0;
+        this.syncRetryCount = 0;
+    }
+
+    private _flushByte(): number {
+        const b = (this.symbolAccum[0] << 6) | (this.symbolAccum[1] << 4) |
+                  (this.symbolAccum[2] << 2) |  this.symbolAccum[3];
+        this.symbolAccum = [];
+        return b & 0xFF;
+    }
+
+    private _hammingDistance(a: number, b: number): number {
+        let diff = (a ^ b) & 0xFF, count = 0;
+        while (diff !== 0) { count += diff & 1; diff >>>= 1; }
+        return count;
+    }
+
+    private _processSymbol(toneIndex: number, dominance: number): void {
+        const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
+
+        switch (this.rxState) {
+            case 'IDLE': break;
+
+            case 'SYNC':
+                if (toneIndex === -1) { this._resetState(); break; }
+                if (!validTone) break;
+                if (toneIndex === this.preambleTone && this.symbolAccum.length === 0) break;
+                this.symbolAccum.push(toneIndex);
+                if (this.symbolAccum.length === 4) {
+                    const syncByte = this._flushByte();
+                    if (this._hammingDistance(syncByte, SYNC_BYTE) <= SYNC_HAMMING_TOLERANCE) {
+                        this.rxState = 'DATA';
+                        this.dataBytes = [];
+                        this.totalExpected = 0;
+                    } else {
+                        this.syncRetryCount++;
+                        if (this.syncRetryCount >= SYNC_MAX_RETRIES) this._resetState();
+                    }
+                }
+                break;
+
+            case 'DATA':
+                if (toneIndex === -1) { this._resetState(); break; }
+                this.symbolAccum.push(toneIndex);
+                if (this.symbolAccum.length === 4) {
+                    const byte = this._flushByte();
+                    this.dataBytes.push(byte);
+                    if (this.dataBytes.length === 2 && this.totalExpected === 0) {
+                        const cl = (this.dataBytes[0] << 8) | this.dataBytes[1];
+                        if (cl === 0 || cl > 512) { this._resetState(); }
+                        else { this.totalExpected = 2 + cl; }
+                    }
+                    if (this.totalExpected > 0 && this.dataBytes.length === this.totalExpected) {
+                        this.rxState = 'CHECKSUM';
+                        this.symbolAccum = [];
+                    }
+                }
+                break;
+
+            case 'CHECKSUM':
+                if (toneIndex === -1) { this._resetState(); break; }
+                this.symbolAccum.push(toneIndex);
+                if (this.symbolAccum.length === 4) {
+                    this._flushByte(); // XOR byte — CRC32 in framing.ts handles data integrity
+                    try { this.onData(new Uint8Array(this.dataBytes).buffer); }
+                    catch (err) { console.error('FSK RX: onData callback threw:', err); }
+                    this._resetState();
+                }
+                break;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // startListening
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -421,14 +659,14 @@ export class TransmitterSession {
  *
  * @param onData   Invoked with each complete, checksum-verified application frame.
  * @param channel  Which frequency channel to listen on.
- *                 Defaults to DATA_CHANNEL (400–1600 Hz) for the receiver.
- *                 Pass ACK_CHANNEL (2200–3400 Hz) when the sender listens for ACKs.
+ *                 Defaults to DATA_CHANNEL (400-1600 Hz) for the receiver.
+ *                 Pass ACK_CHANNEL (2200-3400 Hz) when the sender listens for ACKs.
  */
 export async function startListening(
     onData: (data: ArrayBuffer) => void,
     channel: ChannelConfig = DATA_CHANNEL,
 ): Promise<{ analyser: AnalyserNode; stop: () => void; setRxMuted: (muted: boolean) => void }> {
-    const { kValues, preambleTone } = channel;
+    const { kValues } = channel;
     const ctx = new AudioContext();
     await ctx.resume();
 
@@ -441,10 +679,10 @@ export async function startListening(
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
-        // Disable all browser audio-processing pipelines.  Echo cancellation
-        // and noise suppression specifically target the 300–3400 Hz voice band,
-        // which overlaps exactly with the FSK data channel (400–1600 Hz) and
-        // ACK channel (2200–3400 Hz).  Leaving them enabled causes the browser
+        // Disable all browser audio-processing pipelines. Echo cancellation
+        // and noise suppression specifically target the 300-3400 Hz voice band,
+        // which overlaps exactly with the FSK data channel (400-1600 Hz) and
+        // ACK channel (2200-3400 Hz). Leaving them enabled causes the browser
         // to attenuate or distort the FSK tones before they reach the Goertzel
         // detector, producing sync mismatches and failed transfers.
         audio: {
@@ -459,7 +697,7 @@ export async function startListening(
             ctx.close().catch(() => {});
             const msg = err instanceof Error ? err.message : String(err);
             throw new Error(
-                `startListening: microphone access failed — ${msg}. ` +
+                `startListening: microphone access failed - ${msg}. ` +
                 'Check browser permissions and ensure a microphone is connected.',
             );
         },
@@ -471,7 +709,7 @@ export async function startListening(
     analyser.fftSize = 2048;
     source.connect(analyser);
 
-    // Load the RX processor via a Blob URL — compatible with Vite dev and
+    // Load the RX processor via a Blob URL - compatible with Vite dev and
     // production builds without any special plugin configuration.
     const processorBlob = new Blob([getRxProcessorSource()], { type: 'application/javascript' });
     const processorUrl = URL.createObjectURL(processorBlob);
@@ -486,213 +724,16 @@ export async function startListening(
             silenceThreshold: SILENCE_THRESHOLD,
         },
     });
-    // Connect source → worklet but NOT worklet → destination (avoid mic loopback).
+    // Connect source -> worklet but NOT worklet -> destination (avoid mic loopback).
     source.connect(rxNode);
 
-    // ── RX state machine ──────────────────────────────────────────────────────
-    //
-    // States:
-    //   IDLE      — watching for preambleMinCount consecutive preamble-tone symbols
-    //   SYNC      — reading 4 symbols to decode SYNC_BYTE
-    //   DATA      — decoding data bytes 4-symbols-at-a-time; first 2 bytes give length
-    //   CHECKSUM  — reading 4 symbols (1 XOR byte) and verifying; delivers frame on match
-    //
-    const preambleMinCount = channel.preambleMinSymbols ?? PREAMBLE_MIN_SYMBOLS;
-    type RxState = 'IDLE' | 'SYNC' | 'DATA' | 'CHECKSUM';
-    let rxState: RxState = 'IDLE';
-    let preambleCount = 0;
-    let symbolAccum: number[] = [];  // sub-phase accumulator (max 4 symbols = 1 byte)
-    let dataBytes: number[] = [];    // decoded bytes of the current acoustic frame
-    let totalExpected = 0;           // total data bytes once the length prefix is known
-    let syncRetryCount = 0;          // fallback retry counter
-    let rxMuted = false;
-
-    // ── PLL state ─────────────────────────────────────────────────────────────
-    // We receive 4 micro-symbols per nominal symbol duration.
-    let microBuffer: { seq: number; toneIndex: number; dominance: number }[] = [];
-    let nextSymbolSeq = 0; // Sequence number of the next expected symbol center
-
-    function resetState() {
-        rxState = 'IDLE';
-        preambleCount = 0;
-        symbolAccum = [];
-        dataBytes = [];
-        totalExpected = 0;
-        syncRetryCount = 0;
-        // Do not clear microBuffer or nextSymbolSeq here so the PLL can establish
-        // a fresh lock based on continuous sequence numbers.
-    }
-
-    /** Decode the 4 accumulated symbol indices into one byte and clear the accumulator. */
-    function flushByte(): number {
-        const b = (symbolAccum[0] << 6) | (symbolAccum[1] << 4) |
-                  (symbolAccum[2] << 2) |  symbolAccum[3];
-        symbolAccum = [];
-        return b & 0xFF;
-    }
-
-    /** Count the number of differing bits between two bytes (Hamming distance). */
-    function hammingDistance(a: number, b: number): number {
-        let diff = (a ^ b) & 0xFF;
-        let count = 0;
-        while (diff !== 0) { count += diff & 1; diff >>>= 1; }
-        return count;
-    }
-
-    function processSymbol(toneIndex: number, dominance: number) {
-        const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
-
-        switch (rxState) {
-            case 'IDLE':
-                // Handled externally during PLL lock phase.
-                break;
-
-            case 'SYNC':
-                if (toneIndex === -1) { resetState(); break; }
-                if (!validTone) { break; }
-                // Drain any trailing preamble symbols that arrive after locking
-                if (toneIndex === preambleTone && symbolAccum.length === 0) { break; }
-                
-                symbolAccum.push(toneIndex);
-                if (symbolAccum.length === 4) {
-                    const syncByte = flushByte();
-                    if (hammingDistance(syncByte, SYNC_BYTE) <= SYNC_HAMMING_TOLERANCE) {
-                        rxState = 'DATA';
-                        dataBytes = [];
-                        totalExpected = 0;
-                    } else {
-                        console.warn(`FSK RX: sync mismatch (got 0x${syncByte.toString(16).toUpperCase()})`);
-                        syncRetryCount++;
-                        if (syncRetryCount >= SYNC_MAX_RETRIES) {
-                            resetState();
-                        }
-                    }
-                }
-                break;
-
-            case 'DATA':
-                if (toneIndex === -1) {
-                    console.warn('FSK RX: silence during data symbols — discarding frame');
-                    resetState();
-                    break;
-                }
-                
-                symbolAccum.push(toneIndex);
-                if (symbolAccum.length === 4) {
-                    const byte = flushByte();
-                    dataBytes.push(byte);
-
-                    if (dataBytes.length === 2 && totalExpected === 0) {
-                        const contentLength = (dataBytes[0] << 8) | dataBytes[1];
-                        const MAX_CONTENT_LENGTH = 512;
-                        if (contentLength === 0 || contentLength > MAX_CONTENT_LENGTH) {
-                            console.warn(`FSK RX: implausible content length ${contentLength} — discarding frame`);
-                            resetState();
-                        } else {
-                            totalExpected = 2 + contentLength;
-                        }
-                    }
-
-                    if (totalExpected > 0 && dataBytes.length === totalExpected) {
-                        rxState = 'CHECKSUM';
-                        symbolAccum = [];
-                    }
-                }
-                break;
-
-            case 'CHECKSUM':
-                if (toneIndex === -1) {
-                    console.warn('FSK RX: silence during checksum symbol — discarding frame');
-                    resetState();
-                    break;
-                }
-                
-                symbolAccum.push(toneIndex);
-                if (symbolAccum.length === 4) {
-                    const rxChecksum = flushByte();
-                    let expectedChecksum = 0;
-                    for (const b of dataBytes) expectedChecksum ^= b;
-
-                    if (rxChecksum !== (expectedChecksum & 0xFF)) {
-                        console.warn(
-                            `FSK RX: checksum mismatch ` +
-                            `(expected 0x${(expectedChecksum & 0xFF).toString(16).toUpperCase()}, ` +
-                            `got 0x${rxChecksum.toString(16).toUpperCase()}) — deferring to CRC32`
-                        );
-                    }
-                    const frameBuf = new Uint8Array(dataBytes).buffer;
-                    try {
-                        onData(frameBuf);
-                    } catch (err) {
-                        console.error('FSK RX: onData callback threw:', err);
-                    }
-                    resetState();
-                }
-                break;
-        }
-    }
+    // Delegate all decoding to FskDecoder - same logic, no code duplication.
+    const decoder = new FskDecoder({ sampleRate: ctx.sampleRate, channel, onData });
 
     rxNode.port.onmessage = (event) => {
         const msg = event.data as { type: string; seq: number; toneIndex: number; rms: number; dominance: number };
         if (msg.type !== 'symbol') return;
-        if (rxMuted) return;
-
-        microBuffer.push({ seq: msg.seq, toneIndex: msg.toneIndex, dominance: msg.dominance });
-        // Keep a short history for early-late comparison and lock detection
-        if (microBuffer.length > 16) microBuffer.shift();
-
-        if (rxState === 'IDLE') {
-            const validTone = msg.toneIndex >= 0 && msg.dominance >= TONE_DOMINANCE_RATIO;
-            if (validTone && msg.toneIndex === preambleTone) {
-                // Since we step at 4x rate, each step is worth 0.25 of a nominal symbol
-                preambleCount += 0.25;
-                if (preambleCount >= preambleMinCount) {
-                    // Lock the PLL onto the best phase among the last 4 micro-symbols
-                    let bestDom = -1;
-                    let bestSeq = msg.seq;
-                    for (let i = 0; i < 4; i++) {
-                        const s = microBuffer[microBuffer.length - 1 - i];
-                        if (s && s.dominance > bestDom) {
-                            bestDom = s.dominance;
-                            bestSeq = s.seq;
-                        }
-                    }
-                    // The next expected center is exactly 4 steps away from the historical best
-                    nextSymbolSeq = bestSeq + 4;
-                    while (nextSymbolSeq <= msg.seq) nextSymbolSeq += 4;
-
-                    rxState = 'SYNC';
-                    symbolAccum = [];
-                }
-            } else {
-                preambleCount = Math.max(0, preambleCount - PREAMBLE_MISS_COST * 0.25);
-            }
-            return;
-        }
-
-        // PLL Tracking & Sampling (SYNC, DATA, CHECKSUM)
-        const centerIndex = microBuffer.findIndex(s => s.seq === nextSymbolSeq);
-        // We wait until we have at least one sample AFTER the center sample (for 'late' comparison)
-        if (centerIndex !== -1 && centerIndex < microBuffer.length - 1) {
-            const centerSample = microBuffer[centerIndex];
-            const earlySample = centerIndex > 0 ? microBuffer[centerIndex - 1] : centerSample;
-            const lateSample = microBuffer[centerIndex + 1];
-
-            // Early-Late Gate clock recovery
-            if (centerSample.dominance >= TONE_DOMINANCE_RATIO) {
-                if (earlySample.dominance > lateSample.dominance + 0.2) {
-                    nextSymbolSeq += 3; // Clock drifted early, shift sampling point backwards
-                } else if (lateSample.dominance > earlySample.dominance + 0.2) {
-                    nextSymbolSeq += 5; // Clock drifted late, shift sampling point forwards
-                } else {
-                    nextSymbolSeq += 4;
-                }
-            } else {
-                nextSymbolSeq += 4;
-            }
-
-            processSymbol(centerSample.toneIndex, centerSample.dominance);
-        }
+        decoder._handleSymbolMsg(msg.seq, msg.toneIndex, msg.dominance);
     };
 
     const stop = () => {
@@ -703,26 +744,7 @@ export async function startListening(
         ctx.close().catch(() => {});
     };
 
-    /**
-     * Mutes or unmutes the RX state machine.
-     *
-     * Call `setRxMuted(true)` immediately before transmitting an ACK to prevent
-     * the receiver's own speaker output from being fed back into the Goertzel
-     * detector.  Call `setRxMuted(false)` after the ACK finishes plus a short
-     * ring-down pause (ACK_RING_DOWN_MS) to resume normal frame reception.
-     *
-     * Transitioning to muted also calls `resetState()` so that any frame
-     * partially decoded up to this point is discarded cleanly (in practice the
-     * state machine is already in IDLE when ACKs are sent, but this makes the
-     * guarantee explicit).
-     */
-    const setRxMuted = (muted: boolean): void => {
-        if (muted && !rxMuted) {
-            // Discard any partial frame that might be in-progress before muting.
-            resetState();
-        }
-        rxMuted = muted;
-    };
+    const setRxMuted = (muted: boolean): void => decoder.setMuted(muted);
 
     return { analyser, stop, setRxMuted };
 }

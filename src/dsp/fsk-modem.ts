@@ -387,7 +387,7 @@ export class TransmitterSession {
             }
 
             const audioBuf = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
-            audioBuf.copyToChannel(pcm, 0);
+            audioBuf.copyToChannel(Float32Array.from(pcm), 0);
 
             const src = ctx.createBufferSource();
             src.buffer = audioBuf;

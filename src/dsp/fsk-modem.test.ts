@@ -13,9 +13,9 @@
 import { describe, it, expect } from 'vitest';
 import {
     FskDecoder,
-    DATA_CHANNEL,
     ACK_CHANNEL,
 } from './fsk-modem';
+
 import {
     createFileDataFrames,
     createFileStartFrame,

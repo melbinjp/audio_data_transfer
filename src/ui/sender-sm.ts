@@ -1,4 +1,4 @@
-import { TransmitterSession, startListening, ACK_CHANNEL } from '../dsp/fsk-modem';
+﻿import { TransmitterSession, startListening, ACK_CHANNEL } from '../dsp/fsk-modem';
 import { PAYLOAD_SIZE, createFileDataFrameFromPayload, createFileStartFrame, getAckToken, parseCompactAck } from '../transport/framing';
 
 /**
@@ -61,7 +61,6 @@ const POST_ACK_GUARD_MS = 300;
  *    makes it safe to keep an ACK listener running throughout the transfer.
  */
 export class SenderSM {
-    private state: SenderState = 'idle';
     /** The unique ID for the current file transfer. Made public for testing. */
     public fileId = '';
 
@@ -89,7 +88,6 @@ export class SenderSM {
     }
 
     private setState(newState: SenderState, message?: string) {
-        this.state = newState;
         if (message) {
             this.onStateChange(newState, message);
         }

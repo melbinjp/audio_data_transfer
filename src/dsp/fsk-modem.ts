@@ -109,7 +109,7 @@ export const ACK_CHANNEL: ChannelConfig = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Compute the symbol length (in samples) for a given AudioContext sample rate. */
-function getSymbolSamples(sampleRate: number): number {
+export function getSymbolSamples(sampleRate: number): number {
     return Math.round((SYMBOL_DURATION_MS * sampleRate) / 1000);
 }
 
@@ -150,7 +150,7 @@ function byteToSymbols(b: number): [number, number, number, number] {
  * @param channel  Which frequency channel to encode for (data or ACK).
  *                 Defaults to DATA_CHANNEL so existing callers are unaffected.
  */
-function encodeFrameToAudio(
+export function encodeFrameToAudio(
     frame: ArrayBuffer,
     symbolSamples: number,
     sampleRate: number,

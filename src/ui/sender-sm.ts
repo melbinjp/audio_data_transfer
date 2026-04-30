@@ -10,6 +10,8 @@ export type SenderState = 'idle' | 'sending' | 'complete' | 'error';
 const ACK_TIMEOUT_MS = 10000;
 /** Maximum number of transmission attempts per frame before aborting. */
 const MAX_RETRIES = 5;
+/** Maximum number of transmission attempts for handshake before aborting. Use -1 for infinite retries. */
+const MAX_HANDSHAKE_RETRIES = -1;
 /**
  * Base delay before the first retry (ms).  Doubles with each subsequent
  * attempt (exponential backoff) to give the acoustic environment time to
@@ -120,6 +122,9 @@ export class SenderSM {
         };
         let pendingWaiter: AckWaiter | null = null;
 
+        /** Sentinel value for waitForAck meaning "accept any frameIndex". */
+        const ANY_FRAME_INDEX = -1;
+
         try {
             // ACK listener is tuned to the ACK_CHANNEL (2200–3400 Hz).  Because
             // this band does not overlap the data channel (400–1600 Hz), the
@@ -154,8 +159,7 @@ export class SenderSM {
             return;
         }
 
-/** Sentinel value for waitForAck meaning "accept any frameIndex". */
-const ANY_FRAME_INDEX = -1;
+
 
         /**
          * Returns a Promise that resolves to `true` when the expected ACK
@@ -175,19 +179,19 @@ const ANY_FRAME_INDEX = -1;
         try {
             // ── Handshake ──────────────────────────────────────────────────────
             let ackStartReceived = false;
-            for (let attempt = 0; attempt < MAX_RETRIES && !ackStartReceived; attempt++) {
+            for (let attempt = 0; (MAX_HANDSHAKE_RETRIES === -1 || attempt < MAX_HANDSHAKE_RETRIES) && !ackStartReceived; attempt++) {
                 if (attempt > 0) {
                     // Exponential backoff: wait before retrying so the acoustic
                     // environment settles (3C).
                     await new Promise<void>(r =>
-                        setTimeout(r, RETRY_BASE_DELAY_MS * (1 << (attempt - 1))),
+                        setTimeout(r, Math.min(5000, RETRY_BASE_DELAY_MS * (1 << (attempt - 1)))), // Cap backoff at 5s
                     );
                 }
                 this.setState(
                     'sending',
                     attempt === 0
                         ? 'Sending handshake frame...'
-                        : `Retrying handshake (attempt ${attempt + 1}/${MAX_RETRIES})...`,
+                        : `Retrying handshake (attempt ${attempt + 1}${MAX_HANDSHAKE_RETRIES === -1 ? '' : '/' + MAX_HANDSHAKE_RETRIES})...`,
                 );
                 const startFrame = createFileStartFrame(this.file, this.fileId);
                 await session.send(startFrame);
@@ -210,7 +214,7 @@ const ANY_FRAME_INDEX = -1;
                     if (attempt > 0) {
                         // Exponential backoff between retries (3C).
                         await new Promise<void>(r =>
-                            setTimeout(r, RETRY_BASE_DELAY_MS * (1 << (attempt - 1))),
+                            setTimeout(r, Math.min(5000, RETRY_BASE_DELAY_MS * (1 << (attempt - 1)))), // Cap backoff at 5s
                         );
                     }
                     this.setState(

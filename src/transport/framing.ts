@@ -404,12 +404,20 @@ class FileReassembler {
      * @param frameIndex The index of the chunk.
      * @param payload The chunk's data.
      */
-    addChunk(frameIndex: number, payload: ArrayBuffer) {
+    isValidFrameIndex(frameIndex: number): boolean {
+        return Number.isInteger(frameIndex) && frameIndex >= 0 && frameIndex < this.totalFrames;
+    }
+
+    addChunk(frameIndex: number, payload: ArrayBuffer): boolean {
+        if (!this.isValidFrameIndex(frameIndex)) {
+            return false;
+        }
         if (!this.chunks[frameIndex]) {
             this.chunks[frameIndex] = payload;
             this.receivedChunks++;
         }
         this.lastUpdated = Date.now();
+        return true;
     }
 
     /**
@@ -452,21 +460,49 @@ export class ReassemblyManager {
      * @returns The corresponding `FileReassembler`, or null if one cannot be created.
      */
     public getReassembler(header: FrameHeader): FileReassembler | null {
-        if (header.type === 'file-start' && header.fileId && header.fileName && header.fileType && header.totalFrames !== undefined) {
+        const totalFrames = header.totalFrames;
+        if (
+            header.type === 'file-start' &&
+            typeof header.fileId === 'string' &&
+            header.fileId.length > 0 &&
+            typeof header.fileName === 'string' &&
+            typeof header.fileType === 'string' &&
+            typeof totalFrames === 'number' &&
+            Number.isInteger(totalFrames) &&
+            totalFrames >= 0
+        ) {
             if (!this.reassemblers.has(header.fileId)) {
                 const reassembler = new FileReassembler(
                     header.fileId,
                     header.fileName,
                     header.fileType,
-                    header.totalFrames
+                    totalFrames
                 );
                 this.reassemblers.set(header.fileId, reassembler);
             }
             return this.reassemblers.get(header.fileId)!;
-        } else if (header.type === 'file-data' && header.fileId) {
+        } else if (header.type === 'file-data' && typeof header.fileId === 'string') {
             return this.reassemblers.get(header.fileId) || null;
         }
         return null;
+    }
+
+    /**
+     * Checks whether an incoming file-data frame belongs to an active transfer
+     * and has a chunk index that can be safely stored.
+     */
+    public canProcessFrame(header: FrameHeader): boolean {
+        const frameIndex = header.frameIndex;
+        if (
+            header.type !== 'file-data' ||
+            typeof header.fileId !== 'string' ||
+            typeof frameIndex !== 'number' ||
+            !Number.isInteger(frameIndex)
+        ) {
+            return false;
+        }
+        const reassembler = this.reassemblers.get(header.fileId);
+        return reassembler ? reassembler.isValidFrameIndex(frameIndex) : false;
     }
 
     /**
@@ -476,12 +512,18 @@ export class ReassemblyManager {
      * @returns The reassembled `File` if the transfer is complete, otherwise `null`.
      */
     public processFrame(header: FrameHeader, payload: ArrayBuffer): File | null {
+        if (header.type !== 'file-data') {
+            return null;
+        }
         const reassembler = this.getReassembler(header);
-        if (!reassembler || header.frameIndex === undefined) {
+        const frameIndex = header.frameIndex;
+        if (!reassembler || typeof frameIndex !== 'number' || !Number.isInteger(frameIndex)) {
             return null;
         }
 
-        reassembler.addChunk(header.frameIndex, payload);
+        if (!reassembler.addChunk(frameIndex, payload)) {
+            return null;
+        }
 
         if (reassembler.isComplete()) {
             const file = reassembler.getFile();

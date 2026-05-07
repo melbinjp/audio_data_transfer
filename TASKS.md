@@ -1,29 +1,22 @@
-# Prioritized Follow-up Tasks
+# Project Status
 
-This document outlines the next steps for this project, based on the "Minimal Viable Product (MVP) Roadmap" section of the [TECHNICAL_PLAN.md](TECHNICAL_PLAN.md).
+The MVP is implemented as a client-side Vite app.
 
-These tasks are designed to be tackled sequentially to build a working prototype.
+## Completed
 
-| Priority | Task                                                                                             | Suggested Owner | Effort (from plan) |
-| :------- | :----------------------------------------------------------------------------------------------- | :-------------- | :----------------- |
-| 1 (High) | **Choose and add an open-source license.**                                                       | Repo Owner      | Tiny               |
-|          | - Select an appropriate license (e.g., from [choosealicense.com](https://choosealicense.com)).   |                 |                    |
-|          | - Replace the `LICENSE.md` placeholder with the full license text.                               |                 |                    |
-| 2 (High) | **Build a minimal prototype to transfer a short text string.**                                     | Frontend Dev    | Tiny               |
-|          | - Implement simple FSK (Frequency-shift keying) modulation.                                      |                 |                    |
-|          | - Use the Web Audio API to send and receive the tones.                                           |                 |                    |
-|          | - Verify that a simple string can be sent and decoded between two browser tabs.                  |                 |                    |
-| 3 (Med)  | **Integrate a more robust modem library.**                                                       | Frontend Dev    | Small              |
-|          | - Replace the simple FSK with a library like `quiet-js`.                                         |                 |                    |
-|          | - Implement file chunking and add a CRC check for basic error detection.                         |                 |                    |
-| 4 (Med)  | **Develop the basic user interface.**                                                            | Frontend Dev    | Small              |
-|          | - Create UI components for picking a file to send.                                               |                 |                    |
-|          | - Add a button to download the received file.                                                    |                 |                    |
-|          | - Display basic progress and throughput (bytes/sec).                                             |                 |                    |
-| 5 (Low)  | **Set up a testing harness.**                                                                    | QA/Dev          | Medium             |
-|          | - Create a suite of recorded WAV files with different noise levels.                              |                 |                    |
-|          | - Build a script to run the decoding logic against the test files to ensure deterministic results. |                 |                    |
-| 6 (Low)  | **Set up code linting and formatting.**                                                          | Frontend Dev    | Small              |
-|          | - Add ESLint and Prettier to the project.                                                        |                 |                    |
-|          | - Configure rules for consistent code style.                                                     |                 |                    |
-|          | - Add a pre-commit hook to run the linter.                                                       |                 |                    |
+- ISC license added.
+- Browser sender and receiver UI added.
+- 4-FSK modem implemented with Web Audio playback and AudioWorklet microphone decoding.
+- Binary frame format added with CRC32 validation.
+- File chunking and reassembly implemented.
+- Compact ACK channel added for retransmission support.
+- Tests added for framing, modem loopback, and receiver UI behavior.
+- Build now runs strict TypeScript checking before bundling.
+
+## Useful Next Improvements
+
+- Add a visible stop control for long-running receive sessions.
+- Add measured throughput and retry counters to the UI.
+- Add a calibration mode for speaker volume and microphone level.
+- Add recorded WAV fixtures for deterministic decoder regression tests.
+- Add optional encryption for sensitive transfers.

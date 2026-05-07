@@ -1,19 +1,46 @@
-# Data-Over-Audio Transmission Project
+# Data Over Audio
 
-This repository contains the technical plan for a web-based application designed to transmit arbitrary data (files, text, etc.) between devices using audio.
+A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
 
-The core idea is to build a fully client-side tool that can:
-1.  **Encode** data into an audio stream on a sending device.
-2.  **Play** the audio through the device's speaker.
-3.  **Capture** the audio with a receiving device's microphone.
-4.  **Decode** the audio back into the original data.
+## What Works
 
-The project is designed to be robust, work in noisy environments, and provide real-time diagnostics to the user.
+- File selection and acoustic transmission from the sender panel.
+- Microphone-based receiving with a live frequency display.
+- Binary-safe frame format with CRC32 payload validation.
+- Stop-and-wait acknowledgements over a separate high-frequency ACK channel.
+- Retries with exponential backoff when ACKs are not received.
+- Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
 
-## Getting Started
+## Requirements
 
-The complete technical specification, including the proposed architecture, implementation roadmap, and technology stack, is available in the following document:
+- Node.js 20.19 or newer, or Node.js 22.12 or newer.
+- A modern browser with Web Audio API, AudioWorklet, and microphone support.
+- `localhost` or HTTPS. Browser microphone access is blocked on ordinary insecure origins.
 
-- **[TECHNICAL_PLAN.md](TECHNICAL_PLAN.md)**
+## Run Locally
 
-This repository currently contains only the planning documents. The next step is to begin the implementation as outlined in the technical plan.
+```sh
+npm install
+npm run dev
+```
+
+Open the local Vite URL in two tabs or on two devices. Click **Start Receiving** on the receiver first, then choose a file and click **Send File** on the sender.
+
+For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the default profile prioritizes reliability over speed.
+
+## Checks
+
+```sh
+npm run typecheck
+npm test -- --run
+npm run build
+npm audit --audit-level=moderate
+```
+
+## Project Layout
+
+- `src/dsp`: 4-FSK modem, AudioWorklet receiver, channel constants.
+- `src/transport`: framing, compact ACKs, CRC validation, file reassembly.
+- `src/ui`: sender/receiver UI wiring and spectrogram rendering.
+- `public`: quiet.js assets kept for experimentation and deployment compatibility.
+- `TECHNICAL_PLAN.md`: original architecture plan and future roadmap.

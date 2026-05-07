@@ -34,6 +34,8 @@ const RETRY_BASE_DELAY_MS = 500;
  * the first preamble symbol hits its microphone.
  */
 const POST_ACK_GUARD_MS = 300;
+/** Sentinel value for waitForAck meaning "accept any frameIndex". */
+const ANY_FRAME_INDEX = -1;
 
 /**
  * Sends a file as audio frames using a stop-and-wait ARQ protocol.
@@ -99,7 +101,8 @@ export class SenderSM {
         // Compute the total frame count from file metadata — no need to read
         // the file contents up front, which would cause an OOM for large files.
         const totalFrames = Math.ceil(this.file.size / PAYLOAD_SIZE);
-        this.onProgress(0, totalFrames);
+        const progressTotal = Math.max(1, totalFrames);
+        this.onProgress(0, progressTotal);
 
         const session = new TransmitterSession();
         try {
@@ -121,9 +124,6 @@ export class SenderSM {
             timer: ReturnType<typeof setTimeout>;
         };
         let pendingWaiter: AckWaiter | null = null;
-
-        /** Sentinel value for waitForAck meaning "accept any frameIndex". */
-        const ANY_FRAME_INDEX = -1;
 
         try {
             // ACK listener is tuned to the ACK_CHANNEL (2200–3400 Hz).  Because
@@ -158,8 +158,6 @@ export class SenderSM {
             session.destroy();
             return;
         }
-
-
 
         /**
          * Returns a Promise that resolves to `true` when the expected ACK
@@ -203,7 +201,9 @@ export class SenderSM {
             }
             // Guard: let the receiver finish transmitting its ack-start and
             // return to IDLE before the first data frame's preamble arrives (1D).
-            await new Promise<void>(r => setTimeout(r, POST_ACK_GUARD_MS));
+            if (totalFrames > 0) {
+                await new Promise<void>(r => setTimeout(r, POST_ACK_GUARD_MS));
+            }
 
             // ── Data frames ────────────────────────────────────────────────────
             // Each chunk is read lazily with File.slice() so that only ~4 KB is
@@ -236,7 +236,7 @@ export class SenderSM {
                     );
                     return;
                 }
-                this.onProgress(i + 1, totalFrames);
+                this.onProgress(i + 1, progressTotal);
                 // Post-ACK guard: give the receiver time to finish playing its
                 // ACK, complete speaker ring-down, and re-enter IDLE before the
                 // next frame's preamble arrives (1D).
@@ -245,6 +245,7 @@ export class SenderSM {
                 }
             }
 
+            this.onProgress(progressTotal, progressTotal);
             this.setState('complete', 'File sent successfully.');
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

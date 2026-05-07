@@ -113,6 +113,32 @@ export function initializeReceiver() {
             processAckQueue().catch(err => console.error('Receiver: ACK queue error:', err));
         }
 
+        function finishReceivedFile(file: File): void {
+            statusEl.textContent = `File "${file.name}" received!`;
+            const url = URL.createObjectURL(file);
+            downloadLink.href = url;
+            downloadLink.download = file.name;
+            downloadLink.textContent = `Download ${file.name}`;
+            downloadLink.style.display = 'block';
+            receiveProgress.max = Math.max(1, receiveProgress.max || 1);
+            receiveProgress.value = receiveProgress.max;
+            receiveButton.disabled = false;
+            receiveButton.textContent = 'Start Receiving';
+            spectrogram?.stop();
+            spectrogram = null;
+            reassemblyManager?.destroy();
+            reassemblyManager = null;
+            // Stop receiving new frames now that the transfer is complete.
+            stopListener?.();
+            stopListener = null;
+            // Schedule ACK session cleanup after a delay that gives the in-flight
+            // ACK time to finish. Capture the session reference so a subsequent
+            // click that creates a new session is not affected.
+            const sessionToClose = ackTxSession;
+            ackTxSession = null;
+            window.setTimeout(() => sessionToClose?.destroy(), 3000);
+        }
+
         try {
             // Initialise the ACK TransmitterSession concurrently with
             // startListening so neither blocks the other.  By the time the
@@ -124,17 +150,37 @@ export function initializeReceiver() {
 
                         switch (header.type) {
                             case 'file-start': {
-                                reassemblyManager!.getReassembler(header);
+                                if (!reassemblyManager) {
+                                    break;
+                                }
+                                const reassembler = reassemblyManager.getReassembler(header);
+                                if (!reassembler) {
+                                    statusEl.textContent = 'Error: invalid file metadata. Waiting for next frame...';
+                                    break;
+                                }
                                 statusEl.textContent = `Receiving file: ${header.fileName}`;
                                 enqueueAck(
                                     createCompactAckStartFrame(header.fileId),
                                     `start:${header.fileId}`,
                                 );
+                                if (header.totalFrames === 0) {
+                                    finishReceivedFile(new File([], header.fileName ?? 'received-file', {
+                                        type: header.fileType ?? '',
+                                    }));
+                                }
                                 break;
                             }
                             case 'file-data': {
-                                statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${header.totalFrames}`;
-                                receiveProgress.max = header.totalFrames!;
+                                if (!reassemblyManager || !reassemblyManager.canProcessFrame(header)) {
+                                    statusEl.textContent = 'Waiting for file metadata before accepting data frames...';
+                                    break;
+                                }
+                                const totalFrames =
+                                    Number.isInteger(header.totalFrames) && header.totalFrames! > 0
+                                        ? header.totalFrames!
+                                        : receiveProgress.max || 1;
+                                statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${totalFrames}`;
+                                receiveProgress.max = totalFrames;
                                 receiveProgress.value = header.frameIndex! + 1;
 
                                 const file = reassemblyManager!.processFrame(header, payload);
@@ -144,28 +190,7 @@ export function initializeReceiver() {
                                 );
 
                                 if (file) {
-                                    statusEl.textContent = `File "${file.name}" received!`;
-                                    const url = URL.createObjectURL(file);
-                                    downloadLink.href = url;
-                                    downloadLink.download = file.name;
-                                    downloadLink.textContent = `Download ${file.name}`;
-                                    downloadLink.style.display = 'block';
-                                    receiveButton.disabled = false;
-                                    spectrogram?.stop();
-                                    spectrogram = null;
-                                    reassemblyManager?.destroy();
-                                    reassemblyManager = null;
-                                    // Stop receiving new frames now that the
-                                    // transfer is complete.
-                                    stopListener?.();
-                                    stopListener = null;
-                                    // Schedule ACK session cleanup after a delay
-                                    // that gives the in-flight ACK time to finish.
-                                    // Capture the session reference so a subsequent
-                                    // click that creates a new session is not affected.
-                                    const sessionToClose = ackTxSession;
-                                    ackTxSession = null;
-                                    window.setTimeout(() => sessionToClose?.destroy(), 3000);
+                                    finishReceivedFile(file);
                                 }
                                 break;
                             }

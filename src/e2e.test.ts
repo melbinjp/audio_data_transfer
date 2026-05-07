@@ -20,7 +20,7 @@ vi.mock('./dsp/fsk-modem', async (importOriginal) => {
             }
             destroy() {}
         },
-        startListening: async (cb: (data: ArrayBuffer) => void, channel: any) => {
+        startListening: async (cb: (data: ArrayBuffer) => void, _channel: unknown) => {
             globalSenderAckCallback = cb;
             return { stop: vi.fn() };
         }
@@ -46,7 +46,7 @@ describe('End-to-end simulated file transfer', () => {
         const SAMPLE_RATE = 48000;
         const symbolSamples = getSymbolSamples(SAMPLE_RATE);
 
-        let receivedFrames: ArrayBuffer[] = [];
+        const receivedFrames: ArrayBuffer[] = [];
 
         const receiverDecoder = new FskDecoder({
             sampleRate: SAMPLE_RATE,
@@ -105,8 +105,8 @@ describe('End-to-end simulated file transfer', () => {
 
         const senderSM = new SenderSM(
             file,
-            (state, msg) => { },
-            (prog, tot) => { }
+            () => {},
+            () => {},
         );
 
         senderSM.start();

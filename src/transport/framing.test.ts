@@ -253,5 +253,54 @@ describe('framing', () => {
 
             expect(resultFile).toBeNull();
         });
+
+        it('should accept files with an empty MIME type', async () => {
+            const fileContent = 'raw bytes with no browser-detected type';
+            const fileBuffer = new TextEncoder().encode(fileContent).buffer;
+            const fileId = 'empty-mime-id';
+            const startFrame = createFileStartFrame(
+                new File([fileContent], 'unknown.bin', { type: '' }),
+                fileId,
+            );
+            const { header: startHeader } = deframe(startFrame);
+            expect(manager.getReassembler(startHeader)).not.toBeNull();
+
+            let resultFile: File | null = null;
+            for (const frame of createFileDataFrames(fileBuffer, fileId)) {
+                const { header, payload } = deframe(frame);
+                resultFile = manager.processFrame(header, payload);
+            }
+
+            expect(resultFile).not.toBeNull();
+            expect(resultFile!.name).toBe('unknown.bin');
+            expect(resultFile!.type).toBe('');
+            expect(new TextDecoder().decode(await resultFile!.arrayBuffer())).toBe(fileContent);
+        });
+
+        it('should ignore out-of-range frame indexes', async () => {
+            const fileId = 'index-validation-id';
+            const startFrame = createFileStartFrame(
+                new File(['valid'], 'valid.txt', { type: 'text/plain' }),
+                fileId,
+            );
+            const { header: startHeader } = deframe(startFrame);
+            manager.getReassembler(startHeader);
+
+            const invalidHeader: FrameHeader = {
+                type: 'file-data',
+                fileId,
+                frameIndex: 99,
+                totalFrames: 1,
+            };
+            expect(manager.canProcessFrame(invalidHeader)).toBe(false);
+            expect(manager.processFrame(invalidHeader, new TextEncoder().encode('bad').buffer)).toBeNull();
+
+            const [validFrame] = createFileDataFrames(new TextEncoder().encode('valid').buffer, fileId);
+            const { header, payload } = deframe(validFrame);
+            const resultFile = manager.processFrame(header, payload);
+
+            expect(resultFile).not.toBeNull();
+            expect(new TextDecoder().decode(await resultFile!.arrayBuffer())).toBe('valid');
+        });
     });
 });

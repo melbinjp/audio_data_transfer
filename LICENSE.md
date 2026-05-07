@@ -1,17 +1,15 @@
-# License Not Yet Selected
+ISC License
 
-This project does not yet have a license.
+Copyright (c) 2026 Data Over Audio contributors
 
-## To the Repository Owner
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
 
-A software license is crucial for defining what others can and cannot do with your source code. Without a license, the default copyright laws apply, which can be restrictive and may discourage collaboration and adoption.
-
-It is highly recommended that you choose an open-source license for this project.
-
-### How to Add a License
-
-1.  **Choose a license:** If you are unsure which license is right for your project, [choosealicense.com](https://choosealicense.com/) is an excellent resource to help you decide.
-2.  **Add the license text:** Once you have chosen a license, replace the content of this file with the full text of the license.
-3.  **Update `package.json`:** If this project uses a `package.json` file, be sure to add a `license` field with the license's SPDX identifier (e.g., `"license": "MIT"`).
-
-This placeholder file was added as part of a repository conditioning process to flag the absence of a license.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.

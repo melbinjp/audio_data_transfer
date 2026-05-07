@@ -85,4 +85,22 @@ describe('Receiver UI', () => {
         expect(downloadLink.style.display).toBe('block');
         expect(downloadLink.download).toBe('test.txt');
     });
+
+    it('should show a download link for an empty file', async () => {
+        initializeReceiver();
+        const receiveButton = document.getElementById('receive-button') as HTMLButtonElement;
+        receiveButton.click();
+
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+        const startFrame = createFileStartFrame(
+            new File([], 'empty.bin', { type: '' }),
+            'empty-file-id',
+        );
+        onFrameCallback(startFrame);
+
+        const downloadLink = document.getElementById('download-link') as HTMLAnchorElement;
+        expect(downloadLink.style.display).toBe('block');
+        expect(downloadLink.download).toBe('empty.bin');
+    });
 });

@@ -1,6 +1,12 @@
 import { startListening, primeAudio, TransmitterSession, DATA_CHANNEL, ACK_CHANNEL } from '../dsp/fsk-modem';
 import { ACK_RING_DOWN_MS } from '../dsp/modem-config';
-import { deframe, ReassemblyManager, createCompactAckFrame, createCompactAckStartFrame } from '../transport/framing';
+import {
+    deframe,
+    ReassemblyManager,
+    createCompactAckFrame,
+    createCompactAckStartFrame,
+    createCompactProbeAckFrame,
+} from '../transport/framing';
 import { Spectrogram } from './spectrogram';
 import { getSelectedAcousticProfile } from './acoustic-profile';
 
@@ -39,7 +45,26 @@ export function initializeReceiver() {
     // again before the previous session completes.
     let ackTxSession: TransmitterSession | null = null;
 
+    function stopCurrentSession(message = 'Stopped.'): void {
+        stopListener?.();
+        stopListener = null;
+        ackTxSession?.destroy();
+        ackTxSession = null;
+        spectrogram?.stop();
+        spectrogram = null;
+        reassemblyManager?.destroy();
+        reassemblyManager = null;
+        receiveButton.disabled = false;
+        receiveButton.textContent = 'Start Listening';
+        statusEl.textContent = message;
+    }
+
     receiveButton.addEventListener('click', async () => {
+        if (stopListener) {
+            stopCurrentSession();
+            return;
+        }
+
         // Unlock the Web Audio API from within this synchronous user-gesture
         // handler before any await so that AudioContext.resume() calls in
         // subsequent async code are allowed by Chrome's autoplay policy.
@@ -51,13 +76,8 @@ export function initializeReceiver() {
         receiveProgress.value = 0;
 
         // Tear down any previous listener and ACK session before starting new ones.
-        stopListener?.();
-        stopListener = null;
-        ackTxSession?.destroy();
-        ackTxSession = null;
-        spectrogram?.stop();
-        spectrogram = null;
-        reassemblyManager?.destroy();
+        stopCurrentSession('Listening...');
+        receiveButton.disabled = true;
         reassemblyManager = new ReassemblyManager();
         const acousticProfile = getSelectedAcousticProfile();
 
@@ -164,6 +184,14 @@ export function initializeReceiver() {
                         const { header, payload } = deframe(frame);
 
                         switch (header.type) {
+                            case 'probe': {
+                                enqueueAck(
+                                    createCompactProbeAckFrame(header.fileId),
+                                    `probe:${header.fileId}`,
+                                );
+                                statusEl.textContent = 'Link check heard. Sending confirmation...';
+                                break;
+                            }
                             case 'file-start': {
                                 if (!reassemblyManager) {
                                     break;
@@ -226,12 +254,16 @@ export function initializeReceiver() {
             stopListener = stop;
             spectrogram = new Spectrogram(spectrogramCanvas, analyser);
             spectrogram.start();
+            receiveButton.disabled = false;
+            receiveButton.textContent = 'Stop Listening';
+            statusEl.textContent = 'Listening...';
 
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error('Error starting listener:', err);
             statusEl.textContent = `Error: ${msg}`;
             receiveButton.disabled = false;
+            receiveButton.textContent = 'Start Listening';
             currentAckSession.destroy();
             ackTxSession = null;
             reassemblyManager?.destroy();

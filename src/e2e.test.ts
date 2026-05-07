@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SenderSM } from './ui/sender-sm';
-import { ReassemblyManager, deframe, createCompactAckStartFrame, createCompactAckFrame } from './transport/framing';
+import {
+    ReassemblyManager,
+    deframe,
+    createCompactAckStartFrame,
+    createCompactAckFrame,
+    createCompactProbeAckFrame,
+} from './transport/framing';
 import { FskDecoder, DATA_CHANNEL, ACK_CHANNEL, encodeFrameToAudio, getSymbolSamples } from './dsp/fsk-modem';
+import { ACOUSTIC_PROFILES } from './ui/acoustic-profile';
+import { runAcousticLinkCheck } from './ui/link-check';
 
 let globalSenderAckCallback: ((data: ArrayBuffer) => void) | null = null;
 let globalSimulateSenderSend: ((data: ArrayBuffer) => Promise<void>) | null = null;
@@ -28,6 +36,65 @@ vi.mock('./dsp/fsk-modem', async (importOriginal) => {
 });
 
 describe('End-to-end simulated file transfer', () => {
+    it('confirms the acoustic link check without hardware', async () => {
+        const SAMPLE_RATE = 48000;
+        const symbolSamples = getSymbolSamples(SAMPLE_RATE);
+        const receivedFrames: ArrayBuffer[] = [];
+        const messages: string[] = [];
+
+        const receiverDecoder = new FskDecoder({
+            sampleRate: SAMPLE_RATE,
+            channel: DATA_CHANNEL,
+            onData: data => receivedFrames.push(data),
+        });
+
+        const senderDecoder = new FskDecoder({
+            sampleRate: SAMPLE_RATE,
+            channel: ACK_CHANNEL,
+            onData: (data) => {
+                globalSenderAckCallback?.(data);
+            },
+        });
+
+        globalSimulateSenderSend = async (frame: ArrayBuffer) => {
+            const pcm = encodeFrameToAudio(frame, symbolSamples, SAMPLE_RATE, DATA_CHANNEL);
+            for (let off = 0; off < pcm.length; off += 128) {
+                receiverDecoder.pushSamples(pcm.subarray(off, off + 128));
+            }
+
+            while (receivedFrames.length > 0) {
+                const rFrame = receivedFrames.shift()!;
+                const { header } = deframe(rFrame);
+                if (header.type !== 'probe') continue;
+
+                setTimeout(() => {
+                    const ackPcm = encodeFrameToAudio(
+                        createCompactProbeAckFrame(header.fileId),
+                        symbolSamples,
+                        SAMPLE_RATE,
+                        ACK_CHANNEL,
+                    );
+                    for (let off = 0; off < ackPcm.length; off += 128) {
+                        senderDecoder.pushSamples(ackPcm.subarray(off, off + 128));
+                    }
+                }, 20);
+            }
+        };
+
+        const profile = {
+            ...ACOUSTIC_PROFILES.balanced,
+            sender: {
+                ...ACOUSTIC_PROFILES.balanced.sender,
+                ackTimeoutMs: 1500,
+                listenerSettleMs: 0,
+                linkCheckRetries: 1,
+            },
+        };
+
+        await expect(runAcousticLinkCheck(profile, message => messages.push(message))).resolves.toBe(true);
+        expect(messages).toContain('Link ready.');
+    });
+
     it('transmits and receives a file', async () => {
         const fileContent = 'Hello end-to-end testing!';
         const fileBuffer = new TextEncoder().encode(fileContent).buffer;

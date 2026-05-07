@@ -16,8 +16,9 @@ export const PAYLOAD_SIZE = 64;
  * - `file-data`: Carries a chunk of the file's data.
  * - `ack`: Acknowledges the successful receipt of a `file-data` frame.
  * - `ack-start`: Acknowledges the successful receipt of a `file-start` frame.
+ * - `probe`: Checks that the receiver can hear the sender before transfer.
  */
-export type FrameType = 'file-start' | 'file-data' | 'ack' | 'ack-start';
+export type FrameType = 'file-start' | 'file-data' | 'ack' | 'ack-start' | 'probe';
 
 /**
  * Represents the header of a single frame.
@@ -120,6 +121,18 @@ export function createAckStartFrame(fileId: string): ArrayBuffer {
     return createFrame(header);
 }
 
+/**
+ * Creates a short probe frame for the acoustic link check. The receiver sends
+ * a compact probe ACK back over the ACK channel when this frame is decoded.
+ */
+export function createProbeFrame(fileId: string): ArrayBuffer {
+    const header: FrameHeader = {
+        type: 'probe',
+        fileId,
+    };
+    return createFrame(header);
+}
+
 // ─── Compact ACK protocol ────────────────────────────────────────────────────
 //
 // Full JSON ACK frames carry the entire 36-character UUID as `fileId`, making
@@ -136,6 +149,7 @@ export function createAckStartFrame(fileId: string): ArrayBuffer {
 //
 // Wire format (compact ACK):       {"t":"a","f":"XXXXXX","i":N}
 // Wire format (compact ack-start): {"t":"s","f":"XXXXXX"}
+// Wire format (compact probe-ack): {"t":"p","f":"XXXXXX"}
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -189,11 +203,27 @@ export function createCompactAckStartFrame(fileId: string): ArrayBuffer {
 }
 
 /**
+ * Creates a compact ACK for a link-check probe.
+ */
+export function createCompactProbeAckFrame(fileId: string): ArrayBuffer {
+    const obj = { t: 'p', f: getAckToken(fileId) };
+    const headerBuffer = new TextEncoder().encode(JSON.stringify(obj));
+    const contentLength = 1 + headerBuffer.length;
+    const frame = new ArrayBuffer(2 + contentLength);
+    const v = new Uint8Array(frame);
+    v[0] = (contentLength >> 8) & 0xff;
+    v[1] = contentLength & 0xff;
+    v[2] = headerBuffer.length;
+    v.set(headerBuffer, 3);
+    return frame;
+}
+
+/**
  * Parsed representation of a compact ACK frame.
  */
 export interface CompactAck {
-    /** `'ack'` for a data-frame acknowledgement, `'ack-start'` for the handshake ACK. */
-    type: 'ack' | 'ack-start';
+    /** `'ack'` for data, `'ack-start'` for handshake, `'probe-ack'` for link checks. */
+    type: 'ack' | 'ack-start' | 'probe-ack';
     /** The 6-character hex token derived from the sender's fileId. */
     token: string;
     /** Index of the acknowledged data frame (only present for `type === 'ack'`). */
@@ -223,6 +253,9 @@ export function parseCompactAck(frame: ArrayBuffer): CompactAck | null {
         }
         if (obj.t === 's' && typeof obj.f === 'string') {
             return { type: 'ack-start', token: obj.f };
+        }
+        if (obj.t === 'p' && typeof obj.f === 'string') {
+            return { type: 'probe-ack', token: obj.f };
         }
     } catch {
         // Not a compact ACK — caller will ignore.

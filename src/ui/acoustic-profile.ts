@@ -9,6 +9,7 @@ export interface AcousticProfile {
     sender: {
         ackTimeoutMs: number;
         listenerSettleMs: number;
+        linkCheckRetries: number;
         retryBaseDelayMs: number;
         maxRetries: number;
         maxHandshakeRetries: number;
@@ -33,6 +34,7 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
         sender: {
             ackTimeoutMs: 12000,
             listenerSettleMs: 250,
+            linkCheckRetries: 3,
             retryBaseDelayMs: 500,
             maxRetries: 5,
             maxHandshakeRetries: -1,
@@ -55,6 +57,7 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
         sender: {
             ackTimeoutMs: 18000,
             listenerSettleMs: 700,
+            linkCheckRetries: 4,
             retryBaseDelayMs: 800,
             maxRetries: 8,
             maxHandshakeRetries: -1,

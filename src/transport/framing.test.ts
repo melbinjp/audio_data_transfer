@@ -9,6 +9,8 @@ import {
     createAckStartFrame,
     createCompactAckFrame,
     createCompactAckStartFrame,
+    createCompactProbeAckFrame,
+    createProbeFrame,
     parseCompactAck,
     getAckToken,
 } from './framing';
@@ -116,6 +118,21 @@ describe('framing', () => {
             expect(ack!.type).toBe('ack');
             expect(ack!.token).toBe('15d5f5');
             expect(ack!.frameIndex).toBe(42);
+        });
+
+        it('should create and parse probe frames for link checks', () => {
+            const fileId = '15d5f581-f912-4472-b3ec-0eb972fc6829';
+            const probe = createProbeFrame(fileId);
+            const { header, payload } = deframe(probe);
+
+            expect(header.type).toBe('probe');
+            expect(header.fileId).toBe(fileId);
+            expect(payload.byteLength).toBe(0);
+
+            const probeAck = parseCompactAck(createCompactProbeAckFrame(fileId));
+            expect(probeAck).not.toBeNull();
+            expect(probeAck!.type).toBe('probe-ack');
+            expect(probeAck!.token).toBe(getAckToken(fileId));
         });
 
         it('compact ack frame should be significantly smaller than full ack frame', () => {

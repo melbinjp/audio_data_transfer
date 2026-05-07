@@ -2,59 +2,78 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/x-icon" href="https://favicon.wecanuseai.com/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Data Over Audio</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f7f7f4; color: #1f2933; }
+      main { max-width: 880px; margin: 0 auto; padding: 24px; }
+      header, section { margin-bottom: 18px; }
+      h1 { margin: 0 0 6px; font-size: 2rem; }
+      h2 { margin: 0 0 12px; font-size: 1.1rem; }
+      .version { margin: 0; color: #5c6670; }
+      .panel { border: 1px solid #d7d9d2; background: #fff; border-radius: 8px; padding: 16px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+      label { font-weight: 650; }
+      button, select, input::file-selector-button {
+        border: 1px solid #8a9484; border-radius: 6px; background: #eef2ea; color: #172017;
+        min-height: 36px; padding: 0 12px; font: inherit; cursor: pointer;
+      }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      input[type="file"] { max-width: 100%; }
+      progress { width: 100%; height: 14px; }
+      .status { min-height: 1.5em; color: #374151; }
+      canvas { width: 100%; max-width: 512px; height: 150px; border: 1px solid #c6c9c0; background: #f0f0f0; }
+      a { color: #135f46; font-weight: 700; }
+    </style>
   </head>
   <body>
-    <h1>Data Over Audio</h1>
-    <p>Version: <strong id="app-version">Loading...</strong></p>
-    <div id="app">
-      <div id="file-transfer-mode">
-        <section id="transfer-settings">
-          <h2>Transfer Setup</h2>
-          <label for="acoustic-profile">Acoustic profile:</label>
+    <main>
+      <header>
+        <h1>Data Over Audio</h1>
+        <p class="version">Version: <strong id="app-version">Loading...</strong></p>
+      </header>
+
+      <section class="panel">
+        <h2>Setup</h2>
+        <div class="row">
+          <label for="acoustic-profile">Profile</label>
           <select id="acoustic-profile">
             <option value="phone-reliable">Phone reliable</option>
             <option value="balanced">Balanced</option>
           </select>
-          <p id="acoustic-profile-description">Loading profile...</p>
-        </section>
-        <hr />
-        <div id="sender">
+        </div>
+        <p id="acoustic-profile-description" class="status">Loading profile...</p>
+      </section>
+
+      <div class="grid">
+        <section class="panel">
           <h2>Sender</h2>
-          <div>
-            <label for="file-picker">Select a file to send:</label>
+          <div class="row">
+            <button id="link-check-button">Check Link</button>
+            <span>Link: <strong id="link-status">Not checked</strong></span>
+          </div>
+          <div class="row">
+            <label for="file-picker">File</label>
             <input type="file" id="file-picker" />
           </div>
-          <br />
           <button id="send-button" disabled>Send File</button>
-          <p>Status: <span id="sender-status">Idle</span></p>
-          <progress id="send-progress" value="0" max="100" style="width: 100%;"></progress>
-        </div>
-        <hr />
-        <div id="receiver">
-          <h2>Receiver</h2>
-          <button id="receive-button">Start Receiving</button>
-          <p>Status: <span id="receiver-status">Idle</span></p>
-          <progress id="receive-progress" value="0" max="100" style="width: 100%;"></progress>
-          <br />
-          <canvas id="spectrogram-canvas" width="512" height="150" style="border: 1px solid black;"></canvas>
-          <br />
-          <a id="download-link" style="display: none;"></a>
-        </div>
-      </div>
-    </div>
-    <script type="module" src="/src/main.ts"></script>
+          <p class="status">Status: <span id="sender-status">Idle</span></p>
+          <progress id="send-progress" value="0" max="100"></progress>
+        </section>
 
-    <footer role="contentinfo" style="margin-top: 2rem; padding: 1.5rem; text-align: center; border-top: 1px solid rgba(255,255,255,0.1); color: #888;">
-    <p>&copy; <span class="copyright-year"></span> WeCanUseAI. Empowering creativity with AI.</p>
-    <div style="margin-top: 0.5rem; display: flex; justify-content: center; gap: 1.5rem;">
-      <a href="https://wecanuseai.com/" style="color: inherit; text-decoration: none;">Home</a>
-      <a href="https://wecanuseai.com/privacy.html" style="color: inherit; text-decoration: none;">Privacy</a>
-      <a href="https://wecanuseai.com/terms.html" style="color: inherit; text-decoration: none;">Terms</a>
-      <a href="https://wecanuseai.com/contact.html" style="color: inherit; text-decoration: none;">Contact</a>
-    </div>
-  </footer>
-</body>
+        <section class="panel">
+          <h2>Receiver</h2>
+          <button id="receive-button">Start Listening</button>
+          <p class="status">Status: <span id="receiver-status">Idle</span></p>
+          <progress id="receive-progress" value="0" max="100"></progress>
+          <canvas id="spectrogram-canvas" width="512" height="150"></canvas>
+          <p><a id="download-link" style="display: none;"></a></p>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

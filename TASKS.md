@@ -15,6 +15,7 @@ The MVP is implemented as a client-side Vite app.
 - Live version code/name is displayed in the app.
 - Acoustic profile tuning is available for phone-reliable transfers.
 - ACK turn-taking is synchronized by arming the sender listener before TX and repeating receiver ACKs.
+- Acoustic link check confirms both acoustic directions before file send.
 
 ## Useful Next Improvements
 

@@ -1,7 +1,7 @@
 export const APP_VERSION = {
-    code: 2026050704,
+    code: 2026050705,
     name: 'Mango Modem',
-    semver: '1.1.1',
+    semver: '1.2.0',
     protocol: 3,
 } as const;
 

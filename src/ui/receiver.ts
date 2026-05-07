@@ -8,7 +8,8 @@ import {
     createCompactProbeAckFrame,
 } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
-import { getSelectedAcousticProfile } from './acoustic-profile';
+import { ACOUSTIC_SETTINGS, SignalQualityMeter } from './acoustic-settings';
+import { hasLocalSelfTestPassed } from './self-test';
 
 /**
  * Initializes the receiver UI, wiring up the receive button and handling
@@ -64,6 +65,10 @@ export function initializeReceiver() {
             stopCurrentSession();
             return;
         }
+        if (!hasLocalSelfTestPassed()) {
+            statusEl.textContent = 'Run Test This Device first.';
+            return;
+        }
 
         // Unlock the Web Audio API from within this synchronous user-gesture
         // handler before any await so that AudioContext.resume() calls in
@@ -79,7 +84,8 @@ export function initializeReceiver() {
         stopCurrentSession('Listening...');
         receiveButton.disabled = true;
         reassemblyManager = new ReassemblyManager();
-        const acousticProfile = getSelectedAcousticProfile();
+        const acousticSettings = ACOUSTIC_SETTINGS;
+        const inboundQualityMeter = new SignalQualityMeter();
 
         // ── ACK queue ────────────────────────────────────────────────────────
         // Each entry carries the raw ACK frame and a dedup key (e.g. "data:5").
@@ -96,7 +102,7 @@ export function initializeReceiver() {
 
         // Keep a stable reference to THIS session's ACK transmitter so that
         // processAckQueue cannot accidentally use a session from a later click.
-        const currentAckSession = new TransmitterSession(ACK_CHANNEL, acousticProfile.receiver.ackTransmitter);
+        const currentAckSession = new TransmitterSession(ACK_CHANNEL, acousticSettings.receiver.ackTransmitter);
         ackTxSession = currentAckSession;
 
         async function processAckQueue(): Promise<void> {
@@ -108,13 +114,13 @@ export function initializeReceiver() {
                 // Mute RX before transmitting: prevents self-interference (1C).
                 setRxMuted?.(true);
                 try {
-                    if (acousticProfile.receiver.ackTurnaroundMs > 0) {
-                        await new Promise<void>(r => setTimeout(r, acousticProfile.receiver.ackTurnaroundMs));
+                    if (acousticSettings.receiver.ackTurnaroundMs > 0) {
+                        await new Promise<void>(r => setTimeout(r, acousticSettings.receiver.ackTurnaroundMs));
                     }
-                    for (let i = 0; i < acousticProfile.receiver.ackRepeatCount; i++) {
+                    for (let i = 0; i < acousticSettings.receiver.ackRepeatCount; i++) {
                         await currentAckSession.send(frame);
-                        if (i < acousticProfile.receiver.ackRepeatCount - 1) {
-                            await new Promise<void>(r => setTimeout(r, acousticProfile.receiver.ackRepeatGapMs));
+                        if (i < acousticSettings.receiver.ackRepeatCount - 1) {
+                            await new Promise<void>(r => setTimeout(r, acousticSettings.receiver.ackRepeatGapMs));
                         }
                     }
                 } catch (err) {
@@ -185,11 +191,13 @@ export function initializeReceiver() {
 
                         switch (header.type) {
                             case 'probe': {
+                                const quality = inboundQualityMeter.summarize();
                                 enqueueAck(
-                                    createCompactProbeAckFrame(header.fileId),
+                                    createCompactProbeAckFrame(header.fileId, quality.score),
                                     `probe:${header.fileId}`,
                                 );
-                                statusEl.textContent = 'Link check heard. Sending confirmation...';
+                                statusEl.textContent = `Calibration heard at ${quality.score}/100. Sending confirmation...`;
+                                inboundQualityMeter.reset();
                                 break;
                             }
                             case 'file-start': {
@@ -245,7 +253,10 @@ export function initializeReceiver() {
                         console.error('Frame error:', err);
                         statusEl.textContent = `Error: ${msg}. Waiting for next frame...`;
                     }
-                }, DATA_CHANNEL, acousticProfile.receiver.listen),
+                }, DATA_CHANNEL, {
+                    ...acousticSettings.receiver.listen,
+                    onSignal: signal => inboundQualityMeter.add(signal),
+                }),
                 currentAckSession.init(),
             ]);
 

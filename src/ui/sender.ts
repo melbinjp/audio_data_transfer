@@ -1,7 +1,7 @@
 import { SenderSM } from './sender-sm';
 import { primeAudio } from '../dsp/fsk-modem';
-import { getSelectedAcousticProfile } from './acoustic-profile';
-import { runAcousticLinkCheck } from './link-check';
+import { ACOUSTIC_SETTINGS } from './acoustic-settings';
+import { runDefaultLocalSelfTest } from './self-test';
 
 /**
  * Initializes the sender UI, wiring up the file picker and send button
@@ -9,22 +9,16 @@ import { runAcousticLinkCheck } from './link-check';
  */
 export function initializeSender() {
     const sendButton = document.getElementById('send-button') as HTMLButtonElement;
-    const linkCheckButton = document.getElementById('link-check-button') as HTMLButtonElement;
+    const selfTestButton = document.getElementById('self-test-button') as HTMLButtonElement;
     const filePicker = document.getElementById('file-picker') as HTMLInputElement;
     const sendProgress = document.getElementById('send-progress') as HTMLProgressElement;
     const statusEl = document.getElementById('sender-status') as HTMLSpanElement;
-    const linkStatusEl = document.getElementById('link-status') as HTMLSpanElement;
+    const selfTestStatusEl = document.getElementById('self-test-status') as HTMLSpanElement;
     let selectedFile: File | null = null;
-    let linkReady = false;
+    let selfTestReady = false;
 
     const updateSendButton = () => {
-        sendButton.disabled = !selectedFile || !linkReady;
-    };
-
-    const resetLink = () => {
-        linkReady = false;
-        linkStatusEl.textContent = 'Not checked';
-        updateSendButton();
+        sendButton.disabled = !selectedFile || !selfTestReady;
     };
 
     filePicker.addEventListener('change', () => {
@@ -38,26 +32,26 @@ export function initializeSender() {
         updateSendButton();
     });
 
-    document.getElementById('acoustic-profile')?.addEventListener('change', resetLink);
-
-    linkCheckButton.addEventListener('click', async () => {
+    selfTestButton.addEventListener('click', async () => {
         primeAudio();
-        linkReady = false;
+        selfTestReady = false;
         updateSendButton();
-        linkCheckButton.disabled = true;
-        linkStatusEl.textContent = 'Checking...';
-        statusEl.textContent = 'Checking acoustic link...';
+        selfTestButton.disabled = true;
+        selfTestStatusEl.textContent = 'Testing...';
+        statusEl.textContent = 'Testing this device speaker and microphone...';
 
-        const ok = await runAcousticLinkCheck(getSelectedAcousticProfile(), (message) => {
-            linkStatusEl.textContent = message;
+        const result = await runDefaultLocalSelfTest((message) => {
+            selfTestStatusEl.textContent = message;
         });
 
-        linkReady = ok;
-        linkStatusEl.textContent = ok ? 'Ready' : 'Not ready';
-        statusEl.textContent = ok
-            ? 'Link ready. Choose a file and send.'
-            : 'Link check failed. Start receiver, increase volume, and try again.';
-        linkCheckButton.disabled = false;
+        selfTestReady = result.ok;
+        selfTestStatusEl.textContent = result.ok
+            ? `Ready (data ${result.dataTone.score}/100, ACK ${result.ackTone.score}/100)`
+            : `Weak (data ${result.dataTone.score}/100, ACK ${result.ackTone.score}/100)`;
+        statusEl.textContent = result.ok
+            ? 'This device speaker and microphone are verified.'
+            : 'Self-test failed. Increase volume, reduce distance to mic, and try again.';
+        selfTestButton.disabled = false;
         updateSendButton();
     });
 
@@ -81,7 +75,7 @@ export function initializeSender() {
                 sendProgress.max = total;
                 sendProgress.value = progress;
             },
-            getSelectedAcousticProfile(),
+            ACOUSTIC_SETTINGS,
         );
         sm.start();
     });

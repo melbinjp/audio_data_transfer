@@ -35,24 +35,12 @@
         <p class="version">Version: <strong id="app-version">Loading...</strong></p>
       </header>
 
-      <section class="panel">
-        <h2>Setup</h2>
-        <div class="row">
-          <label for="acoustic-profile">Profile</label>
-          <select id="acoustic-profile">
-            <option value="phone-reliable">Phone reliable</option>
-            <option value="balanced">Balanced</option>
-          </select>
-        </div>
-        <p id="acoustic-profile-description" class="status">Loading profile...</p>
-      </section>
-
       <div class="grid">
         <section class="panel">
           <h2>Sender</h2>
           <div class="row">
-            <button id="link-check-button">Check Link</button>
-            <span>Link: <strong id="link-status">Not checked</strong></span>
+            <button id="self-test-button">Test This Device</button>
+            <span>Local sound: <strong id="self-test-status">Not tested</strong></span>
           </div>
           <div class="row">
             <label for="file-picker">File</label>

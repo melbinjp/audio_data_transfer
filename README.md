@@ -2,7 +2,7 @@
 
 A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
 
-Current live-identification version: **Mango Modem 1.2.0** (`2026050705`, protocol `3`).
+Current live-identification version: **Mango Modem 1.3.0** (`2026050706`, protocol `3`).
 
 ## What Works
 
@@ -12,9 +12,9 @@ Current live-identification version: **Mango Modem 1.2.0** (`2026050705`, protoc
 - Stop-and-wait acknowledgements over a separate high-frequency ACK channel.
 - Retries with exponential backoff when ACKs are not received.
 - Visible version code/name on the page so the live build can be identified.
-- Selectable acoustic profiles, including a slower phone-reliable mode for laptop-to-phone tests.
+- Single acoustic setup path tuned for phone/laptop speaker and microphone transfer.
 - ACK listener is armed before each send, and receiver ACKs are repeated after a turnaround delay.
-- Acoustic link check confirms sender-to-receiver and receiver-to-sender audio before file transfer.
+- Acoustic calibration independently scores sender-to-receiver and receiver-to-sender audio before file transfer.
 - Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
 
 ## Requirements
@@ -32,9 +32,9 @@ npm run dev
 
 Open the local Vite URL in two tabs or on two devices. Click **Start Receiving** on the receiver first, then choose a file and click **Send File** on the sender.
 
-For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the default profile prioritizes reliability over speed.
+For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the setup prioritizes reliability over speed.
 
-Use **Phone reliable** first when testing between a laptop and smartphone. Start listening on the receiver, then run **Check Link** on the sender. If the link check fails, raise the receiver phone volume, move the phone speaker closer to the laptop microphone, and keep both pages in the foreground.
+Start listening on the receiver, then run **Calibrate Link** on the sender. The sender reports two scores: outgoing sound heard by the receiver, and return sound heard by the sender. If either score is weak, adjust volume, distance, and speaker/mic alignment on the relevant device, then calibrate again.
 
 ## Optical Flash Direction
 

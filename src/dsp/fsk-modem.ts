@@ -114,6 +114,15 @@ export interface StartListeningOptions {
     silenceThreshold?: number;
     /** Minimum strongest-bin energy ratio required to accept a symbol. */
     toneDominanceRatio?: number;
+    /** Receives raw symbol-level signal measurements for calibration. */
+    onSignal?: (signal: FskSignal) => void;
+}
+
+export interface FskSignal {
+    seq: number;
+    toneIndex: number;
+    rms: number;
+    dominance: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -761,6 +770,12 @@ export async function startListening(
     rxNode.port.onmessage = (event) => {
         const msg = event.data as { type: string; seq: number; toneIndex: number; rms: number; dominance: number };
         if (msg.type !== 'symbol') return;
+        options.onSignal?.({
+            seq: msg.seq,
+            toneIndex: msg.toneIndex,
+            rms: msg.rms,
+            dominance: msg.dominance,
+        });
         decoder._handleSymbolMsg(msg.seq, msg.toneIndex, msg.dominance);
     };
 

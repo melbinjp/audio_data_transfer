@@ -6,6 +6,9 @@ import { startListening, TransmitterSession } from '../dsp/fsk-modem';
 // Mock the dsp module so no real audio/AudioWorklet is needed
 vi.mock('../dsp/fsk-modem');
 vi.mock('./spectrogram');
+vi.mock('./self-test', () => ({
+    hasLocalSelfTestPassed: () => true,
+}));
 
 describe('Receiver UI', () => {
     let onFrameCallback: (frame: ArrayBuffer) => void;

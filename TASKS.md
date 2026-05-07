@@ -13,7 +13,7 @@ The MVP is implemented as a client-side Vite app.
 - Tests added for framing, modem loopback, and receiver UI behavior.
 - Build now runs strict TypeScript checking before bundling.
 - Live version code/name is displayed in the app.
-- Acoustic profile tuning is available for phone-reliable transfers.
+- Single acoustic calibration path is used for phone/laptop transfers.
 - ACK turn-taking is synchronized by arming the sender listener before TX and repeating receiver ACKs.
 - Acoustic link check confirms both acoustic directions before file send.
 
@@ -21,7 +21,7 @@ The MVP is implemented as a client-side Vite app.
 
 - Add a visible stop control for long-running receive sessions.
 - Add measured throughput and retry counters to the UI.
-- Add a calibration mode for speaker volume and microphone level.
+- Add UI guidance that maps weak outgoing/return quality to the device that needs adjustment.
 - Add screen/camera optical flash transport using Manchester-coded brightness pulses.
 - Add recorded WAV fixtures for deterministic decoder regression tests.
 - Add optional encryption for sensitive transfers.

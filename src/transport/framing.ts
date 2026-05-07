@@ -205,8 +205,8 @@ export function createCompactAckStartFrame(fileId: string): ArrayBuffer {
 /**
  * Creates a compact ACK for a link-check probe.
  */
-export function createCompactProbeAckFrame(fileId: string): ArrayBuffer {
-    const obj = { t: 'p', f: getAckToken(fileId) };
+export function createCompactProbeAckFrame(fileId: string, quality: number): ArrayBuffer {
+    const obj = { t: 'p', f: getAckToken(fileId), q: Math.max(0, Math.min(100, Math.round(quality))) };
     const headerBuffer = new TextEncoder().encode(JSON.stringify(obj));
     const contentLength = 1 + headerBuffer.length;
     const frame = new ArrayBuffer(2 + contentLength);
@@ -228,6 +228,8 @@ export interface CompactAck {
     token: string;
     /** Index of the acknowledged data frame (only present for `type === 'ack'`). */
     frameIndex?: number;
+    /** Signal quality 0-100 (only present for `type === 'probe-ack'`). */
+    quality?: number;
 }
 
 /**
@@ -254,8 +256,8 @@ export function parseCompactAck(frame: ArrayBuffer): CompactAck | null {
         if (obj.t === 's' && typeof obj.f === 'string') {
             return { type: 'ack-start', token: obj.f };
         }
-        if (obj.t === 'p' && typeof obj.f === 'string') {
-            return { type: 'probe-ack', token: obj.f };
+        if (obj.t === 'p' && typeof obj.f === 'string' && typeof obj.q === 'number') {
+            return { type: 'probe-ack', token: obj.f, quality: obj.q };
         }
     } catch {
         // Not a compact ACK — caller will ignore.

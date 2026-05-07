@@ -6,7 +6,7 @@ import {
     getAckToken,
     parseCompactAck,
 } from '../transport/framing';
-import type { AcousticProfile } from './acoustic-profile';
+import { ACOUSTIC_SETTINGS, type AcousticSettings } from './acoustic-settings';
 
 /**
  * Defines the possible states of the sender state machine.
@@ -37,7 +37,7 @@ export class SenderSM {
         private readonly file: File,
         private readonly onStateChange: (state: SenderState, message: string) => void,
         private readonly onProgress: (progress: number, total: number) => void,
-        private readonly acousticProfile?: AcousticProfile,
+        private readonly acousticSettings: AcousticSettings = ACOUSTIC_SETTINGS,
     ) {}
 
     public start() {
@@ -60,15 +60,15 @@ export class SenderSM {
         const progressTotal = Math.max(1, totalFrames);
         this.onProgress(0, progressTotal);
 
-        const senderTuning = this.acousticProfile?.sender;
-        const ackTimeoutMs = senderTuning?.ackTimeoutMs ?? ACK_TIMEOUT_MS;
-        const listenerSettleMs = senderTuning?.listenerSettleMs ?? 250;
-        const retryBaseDelayMs = senderTuning?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
-        const maxRetries = senderTuning?.maxRetries ?? MAX_RETRIES;
-        const maxHandshakeRetries = senderTuning?.maxHandshakeRetries ?? MAX_HANDSHAKE_RETRIES;
-        const postAckGuardMs = senderTuning?.postAckGuardMs ?? POST_ACK_GUARD_MS;
+        const senderTuning = this.acousticSettings.sender;
+        const ackTimeoutMs = senderTuning.ackTimeoutMs ?? ACK_TIMEOUT_MS;
+        const listenerSettleMs = senderTuning.listenerSettleMs ?? 250;
+        const retryBaseDelayMs = senderTuning.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+        const maxRetries = senderTuning.maxRetries ?? MAX_RETRIES;
+        const maxHandshakeRetries = senderTuning.maxHandshakeRetries ?? MAX_HANDSHAKE_RETRIES;
+        const postAckGuardMs = senderTuning.postAckGuardMs ?? POST_ACK_GUARD_MS;
 
-        const session = new TransmitterSession(DATA_CHANNEL, senderTuning?.transmitter);
+        const session = new TransmitterSession(DATA_CHANNEL, senderTuning.transmitter);
         try {
             await session.init();
         } catch (err) {
@@ -104,7 +104,7 @@ export class SenderSM {
                 } catch {
                     // Ignore malformed or noise-induced frames.
                 }
-            }, ACK_CHANNEL, senderTuning?.ackListen);
+            }, ACK_CHANNEL, senderTuning.ackListen);
             stopAckListener = stop;
             if (listenerSettleMs > 0) {
                 this.setState('sending', 'Syncing ACK listener...');

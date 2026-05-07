@@ -129,10 +129,11 @@ describe('framing', () => {
             expect(header.fileId).toBe(fileId);
             expect(payload.byteLength).toBe(0);
 
-            const probeAck = parseCompactAck(createCompactProbeAckFrame(fileId));
+            const probeAck = parseCompactAck(createCompactProbeAckFrame(fileId, 73));
             expect(probeAck).not.toBeNull();
             expect(probeAck!.type).toBe('probe-ack');
             expect(probeAck!.token).toBe(getAckToken(fileId));
+            expect(probeAck!.quality).toBe(73);
         });
 
         it('compact ack frame should be significantly smaller than full ack frame', () => {

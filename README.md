@@ -2,7 +2,7 @@
 
 A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
 
-Current live-identification version: **Mango Modem 1.1.0** (`2026050703`, protocol `3`).
+Current live-identification version: **Mango Modem 1.1.1** (`2026050704`, protocol `3`).
 
 ## What Works
 
@@ -13,6 +13,7 @@ Current live-identification version: **Mango Modem 1.1.0** (`2026050703`, protoc
 - Retries with exponential backoff when ACKs are not received.
 - Visible version code/name on the page so the live build can be identified.
 - Selectable acoustic profiles, including a slower phone-reliable mode for laptop-to-phone tests.
+- ACK listener is armed before each send, and receiver ACKs are repeated after a turnaround delay.
 - Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
 
 ## Requirements

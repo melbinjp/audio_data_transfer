@@ -70,6 +70,7 @@ export function initializeReceiver() {
         type AckEntry = { frame: ArrayBuffer; key: string };
         const ackQueue: AckEntry[] = [];
         let isProcessingAck = false;
+        let activeAckKey: string | null = null;
         // Set by the Promise.all below once startListening resolves.
         let setRxMuted: ((muted: boolean) => void) | null = null;
 
@@ -82,16 +83,26 @@ export function initializeReceiver() {
             if (isProcessingAck) return;
             isProcessingAck = true;
             while (ackQueue.length > 0) {
-                const { frame } = ackQueue.shift()!;
+                const { frame, key } = ackQueue.shift()!;
+                activeAckKey = key;
                 // Mute RX before transmitting: prevents self-interference (1C).
                 setRxMuted?.(true);
                 try {
-                    await currentAckSession.send(frame);
+                    if (acousticProfile.receiver.ackTurnaroundMs > 0) {
+                        await new Promise<void>(r => setTimeout(r, acousticProfile.receiver.ackTurnaroundMs));
+                    }
+                    for (let i = 0; i < acousticProfile.receiver.ackRepeatCount; i++) {
+                        await currentAckSession.send(frame);
+                        if (i < acousticProfile.receiver.ackRepeatCount - 1) {
+                            await new Promise<void>(r => setTimeout(r, acousticProfile.receiver.ackRepeatGapMs));
+                        }
+                    }
                 } catch (err) {
                     console.error('Receiver: ACK transmission error:', err);
                     // Re-enable RX even on failure so the session is not stuck
                     // muted forever; then abort the queue.
                     setRxMuted?.(false);
+                    activeAckKey = null;
                     break;
                 }
                 // Speaker ring-down: keep RX muted for a short period after the
@@ -99,6 +110,7 @@ export function initializeReceiver() {
                 // preamble symbols for the next incoming frame (1C).
                 await new Promise<void>(r => setTimeout(r, ACK_RING_DOWN_MS));
                 setRxMuted?.(false);
+                activeAckKey = null;
             }
             isProcessingAck = false;
         }
@@ -110,6 +122,7 @@ export function initializeReceiver() {
          *                  If the same key is already queued, the call is ignored.
          */
         function enqueueAck(ackFrame: ArrayBuffer, key: string): void {
+            if (activeAckKey === key) return;
             if (ackQueue.some(a => a.key === key)) return;
             ackQueue.push({ frame: ackFrame, key });
             processAckQueue().catch(err => console.error('Receiver: ACK queue error:', err));

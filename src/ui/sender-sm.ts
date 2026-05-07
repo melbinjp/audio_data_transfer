@@ -62,6 +62,7 @@ export class SenderSM {
 
         const senderTuning = this.acousticProfile?.sender;
         const ackTimeoutMs = senderTuning?.ackTimeoutMs ?? ACK_TIMEOUT_MS;
+        const listenerSettleMs = senderTuning?.listenerSettleMs ?? 250;
         const retryBaseDelayMs = senderTuning?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
         const maxRetries = senderTuning?.maxRetries ?? MAX_RETRIES;
         const maxHandshakeRetries = senderTuning?.maxHandshakeRetries ?? MAX_HANDSHAKE_RETRIES;
@@ -105,6 +106,10 @@ export class SenderSM {
                 }
             }, ACK_CHANNEL, senderTuning?.ackListen);
             stopAckListener = stop;
+            if (listenerSettleMs > 0) {
+                this.setState('sending', 'Syncing ACK listener...');
+                await new Promise<void>(r => setTimeout(r, listenerSettleMs));
+            }
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             this.setState('error', `Failed to start ACK listener: ${msg}`);
@@ -112,8 +117,13 @@ export class SenderSM {
             return;
         }
 
-        const waitForAck = (ackType: string, frameIndex: number): Promise<boolean> =>
+        const beginWaitForAck = (ackType: string, frameIndex: number): Promise<boolean> =>
             new Promise((resolve) => {
+                if (pendingWaiter) {
+                    clearTimeout(pendingWaiter.timer);
+                    pendingWaiter.resolve(false);
+                    pendingWaiter = null;
+                }
                 const timer = setTimeout(() => {
                     if (pendingWaiter?.resolve === resolve) pendingWaiter = null;
                     resolve(false);
@@ -140,9 +150,10 @@ export class SenderSM {
                         : `Retrying handshake (attempt ${attempt + 1}${maxHandshakeRetries === -1 ? '' : '/' + maxHandshakeRetries})...`,
                 );
                 const startFrame = createFileStartFrame(this.file, this.fileId);
+                const ackPromise = beginWaitForAck('ack-start', ANY_FRAME_INDEX);
                 await session.send(startFrame);
                 this.setState('sending', 'Waiting for receiver ACK...');
-                ackStartReceived = await waitForAck('ack-start', ANY_FRAME_INDEX);
+                ackStartReceived = await ackPromise;
             }
             if (!ackStartReceived) {
                 this.setState('error', 'No acknowledgment from receiver. Is the receiver listening?');
@@ -169,9 +180,10 @@ export class SenderSM {
                     const start = i * PAYLOAD_SIZE;
                     const chunkBuffer = await this.file.slice(start, start + PAYLOAD_SIZE).arrayBuffer();
                     const frame = createFileDataFrameFromPayload(chunkBuffer, this.fileId, i, totalFrames);
+                    const ackPromise = beginWaitForAck('ack', i);
                     await session.send(frame);
                     this.setState('sending', `Waiting for ACK for frame ${i + 1}/${totalFrames}...`);
-                    ackReceived = await waitForAck('ack', i);
+                    ackReceived = await ackPromise;
                 }
                 if (!ackReceived) {
                     this.setState(
@@ -192,6 +204,10 @@ export class SenderSM {
             const msg = err instanceof Error ? err.message : String(err);
             this.setState('error', `Transmission error: ${msg}`);
         } finally {
+            if (pendingWaiter) {
+                clearTimeout(pendingWaiter.timer);
+                pendingWaiter = null;
+            }
             session.destroy();
             stopAckListener?.();
         }

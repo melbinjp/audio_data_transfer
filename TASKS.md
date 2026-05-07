@@ -14,6 +14,7 @@ The MVP is implemented as a client-side Vite app.
 - Build now runs strict TypeScript checking before bundling.
 - Live version code/name is displayed in the app.
 - Acoustic profile tuning is available for phone-reliable transfers.
+- ACK turn-taking is synchronized by arming the sender listener before TX and repeating receiver ACKs.
 
 ## Useful Next Improvements
 

@@ -8,6 +8,7 @@ export interface AcousticProfile {
     description: string;
     sender: {
         ackTimeoutMs: number;
+        listenerSettleMs: number;
         retryBaseDelayMs: number;
         maxRetries: number;
         maxHandshakeRetries: number;
@@ -16,6 +17,9 @@ export interface AcousticProfile {
         ackListen: StartListeningOptions;
     };
     receiver: {
+        ackTurnaroundMs: number;
+        ackRepeatCount: number;
+        ackRepeatGapMs: number;
         listen: StartListeningOptions;
         ackTransmitter: TransmitterOptions;
     };
@@ -28,6 +32,7 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
         description: 'Shorter frames and normal thresholds for nearby laptops.',
         sender: {
             ackTimeoutMs: 12000,
+            listenerSettleMs: 250,
             retryBaseDelayMs: 500,
             maxRetries: 5,
             maxHandshakeRetries: -1,
@@ -36,6 +41,9 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
             ackListen: { silenceThreshold: 0.004, toneDominanceRatio: 0.38 },
         },
         receiver: {
+            ackTurnaroundMs: 250,
+            ackRepeatCount: 2,
+            ackRepeatGapMs: 120,
             listen: { silenceThreshold: 0.004, toneDominanceRatio: 0.38 },
             ackTransmitter: { gain: 1 },
         },
@@ -46,6 +54,7 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
         description: 'Longer waits and more sensitive detection for phone speaker/mic ACKs.',
         sender: {
             ackTimeoutMs: 18000,
+            listenerSettleMs: 700,
             retryBaseDelayMs: 800,
             maxRetries: 8,
             maxHandshakeRetries: -1,
@@ -54,6 +63,9 @@ export const ACOUSTIC_PROFILES: Record<AcousticProfileId, AcousticProfile> = {
             ackListen: { silenceThreshold: 0.0025, toneDominanceRatio: 0.32 },
         },
         receiver: {
+            ackTurnaroundMs: 500,
+            ackRepeatCount: 3,
+            ackRepeatGapMs: 180,
             listen: { silenceThreshold: 0.0025, toneDominanceRatio: 0.32 },
             ackTransmitter: { gain: 1 },
         },

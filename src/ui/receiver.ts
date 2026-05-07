@@ -1,7 +1,8 @@
-import { startListening, primeAudio, TransmitterSession, ACK_CHANNEL } from '../dsp/fsk-modem';
+import { startListening, primeAudio, TransmitterSession, DATA_CHANNEL, ACK_CHANNEL } from '../dsp/fsk-modem';
 import { ACK_RING_DOWN_MS } from '../dsp/modem-config';
 import { deframe, ReassemblyManager, createCompactAckFrame, createCompactAckStartFrame } from '../transport/framing';
 import { Spectrogram } from './spectrogram';
+import { getSelectedAcousticProfile } from './acoustic-profile';
 
 /**
  * Initializes the receiver UI, wiring up the receive button and handling
@@ -58,6 +59,7 @@ export function initializeReceiver() {
         spectrogram = null;
         reassemblyManager?.destroy();
         reassemblyManager = new ReassemblyManager();
+        const acousticProfile = getSelectedAcousticProfile();
 
         // ── ACK queue ────────────────────────────────────────────────────────
         // Each entry carries the raw ACK frame and a dedup key (e.g. "data:5").
@@ -73,7 +75,7 @@ export function initializeReceiver() {
 
         // Keep a stable reference to THIS session's ACK transmitter so that
         // processAckQueue cannot accidentally use a session from a later click.
-        const currentAckSession = new TransmitterSession(ACK_CHANNEL);
+        const currentAckSession = new TransmitterSession(ACK_CHANNEL, acousticProfile.receiver.ackTransmitter);
         ackTxSession = currentAckSession;
 
         async function processAckQueue(): Promise<void> {
@@ -163,6 +165,7 @@ export function initializeReceiver() {
                                     createCompactAckStartFrame(header.fileId),
                                     `start:${header.fileId}`,
                                 );
+                                statusEl.textContent = `Receiving file: ${header.fileName}. Sending ACK...`;
                                 if (header.totalFrames === 0) {
                                     finishReceivedFile(new File([], header.fileName ?? 'received-file', {
                                         type: header.fileType ?? '',
@@ -188,6 +191,7 @@ export function initializeReceiver() {
                                     createCompactAckFrame(header.fileId, header.frameIndex!),
                                     `data:${header.frameIndex}`,
                                 );
+                                statusEl.textContent = `Receiving frame ${header.frameIndex! + 1}/${totalFrames}. Sending ACK...`;
 
                                 if (file) {
                                     finishReceivedFile(file);
@@ -200,7 +204,7 @@ export function initializeReceiver() {
                         console.error('Frame error:', err);
                         statusEl.textContent = `Error: ${msg}. Waiting for next frame...`;
                     }
-                }),
+                }, DATA_CHANNEL, acousticProfile.receiver.listen),
                 currentAckSession.init(),
             ]);
 

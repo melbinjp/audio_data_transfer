@@ -8,8 +8,19 @@
   </head>
   <body>
     <h1>Data Over Audio</h1>
+    <p>Version: <strong id="app-version">Loading...</strong></p>
     <div id="app">
       <div id="file-transfer-mode">
+        <section id="transfer-settings">
+          <h2>Transfer Setup</h2>
+          <label for="acoustic-profile">Acoustic profile:</label>
+          <select id="acoustic-profile">
+            <option value="phone-reliable">Phone reliable</option>
+            <option value="balanced">Balanced</option>
+          </select>
+          <p id="acoustic-profile-description">Loading profile...</p>
+        </section>
+        <hr />
         <div id="sender">
           <h2>Sender</h2>
           <div>

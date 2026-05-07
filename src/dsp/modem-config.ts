@@ -82,7 +82,7 @@ export const ACK_PREAMBLE_TONE = 1;
  * this adds 100 ms of preamble per frame, a worthwhile cost for the
  * substantially improved lock reliability on subsequent frames.
  */
-export const PREAMBLE_SYMBOLS = 30;
+export const PREAMBLE_SYMBOLS = 40;
 
 /**
  * Number of preamble symbols prepended to every ACK frame (receiver → sender).
@@ -91,7 +91,7 @@ export const PREAMBLE_SYMBOLS = 30;
  * speakers may have a slow gain ramp at startup; extra preamble compensates
  * for the first few attenuated symbols.
  */
-export const ACK_PREAMBLE_SYMBOLS = 30;
+export const ACK_PREAMBLE_SYMBOLS = 70;
 
 /**
  * Minimum consecutive preamble-tone symbols required to declare preamble lock
@@ -99,7 +99,7 @@ export const ACK_PREAMBLE_SYMBOLS = 30;
  * sender's listener can lock on even when the first few ACK preamble symbols
  * are weakened by speaker warm-up or room acoustics.
  */
-export const ACK_PREAMBLE_MIN_SYMBOLS = 12;
+export const ACK_PREAMBLE_MIN_SYMBOLS = 10;
 
 /**
  * Minimum consecutive preamble-tone symbols required to declare preamble lock.
@@ -181,4 +181,4 @@ export const PREAMBLE_MISS_COST = 1;
  * this value if ring-down artefacts are still visible in the spectrogram after
  * ACK transmission ends.
  */
-export const ACK_RING_DOWN_MS = 50;
+export const ACK_RING_DOWN_MS = 100;

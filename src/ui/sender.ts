@@ -1,5 +1,6 @@
 import { SenderSM } from './sender-sm';
 import { primeAudio } from '../dsp/fsk-modem';
+import { getSelectedAcousticProfile } from './acoustic-profile';
 
 /**
  * Initializes the sender UI, wiring up the file picker and send button
@@ -42,7 +43,8 @@ export function initializeSender() {
             (progress, total) => {
                 sendProgress.max = total;
                 sendProgress.value = progress;
-            }
+            },
+            getSelectedAcousticProfile(),
         );
         sm.start();
     });

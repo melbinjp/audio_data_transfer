@@ -12,11 +12,14 @@ The MVP is implemented as a client-side Vite app.
 - Compact ACK channel added for retransmission support.
 - Tests added for framing, modem loopback, and receiver UI behavior.
 - Build now runs strict TypeScript checking before bundling.
+- Live version code/name is displayed in the app.
+- Acoustic profile tuning is available for phone-reliable transfers.
 
 ## Useful Next Improvements
 
 - Add a visible stop control for long-running receive sessions.
 - Add measured throughput and retry counters to the UI.
 - Add a calibration mode for speaker volume and microphone level.
+- Add screen/camera optical flash transport using Manchester-coded brightness pulses.
 - Add recorded WAV fixtures for deterministic decoder regression tests.
 - Add optional encryption for sensitive transfers.

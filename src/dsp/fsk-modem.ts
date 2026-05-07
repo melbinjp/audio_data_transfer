@@ -104,6 +104,18 @@ export const ACK_CHANNEL: ChannelConfig = {
     preambleMinSymbols: ACK_PREAMBLE_MIN_SYMBOLS,
 };
 
+export interface TransmitterOptions {
+    /** Output gain applied before the AudioContext destination. */
+    gain?: number;
+}
+
+export interface StartListeningOptions {
+    /** RMS threshold below which a symbol is treated as silence. */
+    silenceThreshold?: number;
+    /** Minimum strongest-bin energy ratio required to accept a symbol. */
+    toneDominanceRatio?: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,7 +359,10 @@ export class TransmitterSession {
     private ctx: AudioContext | null = null;
     private isDestroyed = false;
 
-    constructor(private readonly channel: ChannelConfig = DATA_CHANNEL) {}
+    constructor(
+        private readonly channel: ChannelConfig = DATA_CHANNEL,
+        private readonly options: TransmitterOptions = {},
+    ) {}
 
     /** Initialises the AudioContext.  Must be called once before any send(). */
     async init(): Promise<void> {
@@ -390,8 +405,11 @@ export class TransmitterSession {
             audioBuf.copyToChannel(Float32Array.from(pcm), 0);
 
             const src = ctx.createBufferSource();
+            const gain = ctx.createGain();
+            gain.gain.value = this.options.gain ?? 0.9;
             src.buffer = audioBuf;
-            src.connect(ctx.destination);
+            src.connect(gain);
+            gain.connect(ctx.destination);
             src.onended = () => resolve();
             src.start();
         });
@@ -446,6 +464,7 @@ export class FskDecoder {
     private readonly symbolSamples: number;
     private readonly step: number;
     private readonly silenceThreshold: number;
+    private readonly toneDominanceRatio: number;
 
     private buf: Float32Array = new Float32Array(0);
     private seq = 0;
@@ -466,6 +485,7 @@ export class FskDecoder {
         channel?: ChannelConfig;
         onData: (data: ArrayBuffer) => void;
         silenceThreshold?: number;
+        toneDominanceRatio?: number;
     }) {
         const channel = opts.channel ?? DATA_CHANNEL;
         this.kValues = channel.kValues;
@@ -475,6 +495,7 @@ export class FskDecoder {
         this.symbolSamples = getSymbolSamples(opts.sampleRate);
         this.step = Math.max(1, Math.floor(this.symbolSamples / 4));
         this.silenceThreshold = opts.silenceThreshold ?? SILENCE_THRESHOLD;
+        this.toneDominanceRatio = opts.toneDominanceRatio ?? TONE_DOMINANCE_RATIO;
     }
 
     /** Push a chunk of raw PCM samples. Can be called repeatedly. */
@@ -529,7 +550,7 @@ export class FskDecoder {
         if (this.microBuffer.length > 16) this.microBuffer.shift();
 
         if (this.rxState === 'IDLE') {
-            const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
+            const validTone = toneIndex >= 0 && dominance >= this.toneDominanceRatio;
             if (validTone && toneIndex === this.preambleTone) {
                 this.preambleCount += 0.25;
                 if (this.preambleCount >= this.preambleMinCount) {
@@ -556,7 +577,7 @@ export class FskDecoder {
             const early  = ci > 0 ? this.microBuffer[ci - 1] : center;
             const late   = this.microBuffer[ci + 1];
 
-            if (center.dominance >= TONE_DOMINANCE_RATIO) {
+            if (center.dominance >= this.toneDominanceRatio) {
                 if (early.dominance > late.dominance + 0.2)      this.nextSymbolSeq += 3;
                 else if (late.dominance > early.dominance + 0.2) this.nextSymbolSeq += 5;
                 else                                              this.nextSymbolSeq += 4;
@@ -590,7 +611,7 @@ export class FskDecoder {
     }
 
     private _processSymbol(toneIndex: number, dominance: number): void {
-        const validTone = toneIndex >= 0 && dominance >= TONE_DOMINANCE_RATIO;
+        const validTone = toneIndex >= 0 && dominance >= this.toneDominanceRatio;
 
         switch (this.rxState) {
             case 'IDLE': break;
@@ -665,6 +686,7 @@ export class FskDecoder {
 export async function startListening(
     onData: (data: ArrayBuffer) => void,
     channel: ChannelConfig = DATA_CHANNEL,
+    options: StartListeningOptions = {},
 ): Promise<{ analyser: AnalyserNode; stop: () => void; setRxMuted: (muted: boolean) => void }> {
     const { kValues } = channel;
     const ctx = new AudioContext();
@@ -721,14 +743,20 @@ export async function startListening(
         processorOptions: {
             symbolSamples,
             kValues: Array.from(kValues),
-            silenceThreshold: SILENCE_THRESHOLD,
+            silenceThreshold: options.silenceThreshold ?? SILENCE_THRESHOLD,
         },
     });
     // Connect source -> worklet but NOT worklet -> destination (avoid mic loopback).
     source.connect(rxNode);
 
     // Delegate all decoding to FskDecoder - same logic, no code duplication.
-    const decoder = new FskDecoder({ sampleRate: ctx.sampleRate, channel, onData });
+    const decoder = new FskDecoder({
+        sampleRate: ctx.sampleRate,
+        channel,
+        onData,
+        silenceThreshold: options.silenceThreshold,
+        toneDominanceRatio: options.toneDominanceRatio,
+    });
 
     rxNode.port.onmessage = (event) => {
         const msg = event.data as { type: string; seq: number; toneIndex: number; rms: number; dominance: number };

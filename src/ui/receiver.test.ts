@@ -54,7 +54,7 @@ describe('Receiver UI', () => {
         onFrameCallback(startFrame);
 
         const statusEl = document.getElementById('receiver-status') as HTMLSpanElement;
-        expect(statusEl.textContent).toBe('Receiving file: test.txt');
+        expect(statusEl.textContent).toBe('Receiving file: test.txt. Sending ACK...');
     });
 
     it('should show download link when all frames received', async () => {

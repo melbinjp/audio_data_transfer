@@ -2,6 +2,8 @@
 
 A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
 
+Current live-identification version: **Mango Modem 1.1.0** (`2026050703`, protocol `3`).
+
 ## What Works
 
 - File selection and acoustic transmission from the sender panel.
@@ -9,6 +11,8 @@ A browser-based file transfer experiment that sends arbitrary files through audi
 - Binary-safe frame format with CRC32 payload validation.
 - Stop-and-wait acknowledgements over a separate high-frequency ACK channel.
 - Retries with exponential backoff when ACKs are not received.
+- Visible version code/name on the page so the live build can be identified.
+- Selectable acoustic profiles, including a slower phone-reliable mode for laptop-to-phone tests.
 - Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
 
 ## Requirements
@@ -27,6 +31,12 @@ npm run dev
 Open the local Vite URL in two tabs or on two devices. Click **Start Receiving** on the receiver first, then choose a file and click **Send File** on the sender.
 
 For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the default profile prioritizes reliability over speed.
+
+Use **Phone reliable** first when testing between a laptop and smartphone. If the sender stays at "Waiting for receiver ACK", raise the receiver phone volume, move the phone speaker closer to the laptop microphone, and keep both pages in the foreground.
+
+## Optical Flash Direction
+
+The planned screen/camera mode should use high-contrast light pulses, not QR codes. The protocol should be an on/off keyed optical transport with Manchester timing, a calibration preamble, CRC checks, and fountain-style redundancy so the receiver can recover even if camera frames are dropped. The same framing and reassembly layer can be reused once the optical symbol decoder is added.
 
 ## Checks
 

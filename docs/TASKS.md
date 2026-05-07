@@ -1,0 +1,27 @@
+# Project Status
+
+The MVP is implemented as a client-side Vite app.
+
+## Completed
+
+- ISC license added.
+- Browser sender and receiver UI added.
+- 4-FSK modem implemented with Web Audio playback and AudioWorklet microphone decoding.
+- Binary frame format added with CRC32 validation.
+- File chunking and reassembly implemented.
+- Compact ACK channel added for retransmission support.
+- Tests added for framing, modem loopback, and receiver UI behavior.
+- Build now runs strict TypeScript checking before bundling.
+- Live version code/name is displayed in the app.
+- Single acoustic calibration path is used for phone/laptop transfers.
+- ACK turn-taking is synchronized by arming the sender listener before TX and repeating receiver ACKs.
+- Acoustic link check confirms both acoustic directions before file send.
+
+## Useful Next Improvements
+
+- Add a visible stop control for long-running receive sessions.
+- Add measured throughput and retry counters to the UI.
+- Add UI guidance that maps weak outgoing/return quality to the device that needs adjustment.
+- Add screen/camera optical flash transport using Manchester-coded brightness pulses.
+- Add recorded WAV fixtures for deterministic decoder regression tests.
+- Add optional encryption for sensitive transfers.

@@ -120,7 +120,7 @@ describe('framing', () => {
             expect(ack!.frameIndex).toBe(42);
         });
 
-        it('should create and parse probe frames for link checks', () => {
+        it('should create and parse probe frames for readiness checks', () => {
             const fileId = '15d5f581-f912-4472-b3ec-0eb972fc6829';
             const probe = createProbeFrame(fileId);
             const { header, payload } = deframe(probe);

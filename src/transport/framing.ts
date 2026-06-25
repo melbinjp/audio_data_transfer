@@ -16,7 +16,7 @@ export const PAYLOAD_SIZE = 64;
  * - `file-data`: Carries a chunk of the file's data.
  * - `ack`: Acknowledges the successful receipt of a `file-data` frame.
  * - `ack-start`: Acknowledges the successful receipt of a `file-start` frame.
- * - `probe`: Checks that the receiver can hear the sender before transfer.
+ * - `probe`: Carries a short readiness probe through the normal frame path.
  */
 export type FrameType = 'file-start' | 'file-data' | 'ack' | 'ack-start' | 'probe';
 
@@ -122,8 +122,8 @@ export function createAckStartFrame(fileId: string): ArrayBuffer {
 }
 
 /**
- * Creates a short probe frame for the acoustic link check. The receiver sends
- * a compact probe ACK back over the ACK channel when this frame is decoded.
+ * Creates a short probe frame for local readiness checks or diagnostics.
+ * The same normal frame path is used so probe behavior matches transfer audio.
  */
 export function createProbeFrame(fileId: string): ArrayBuffer {
     const header: FrameHeader = {
@@ -149,7 +149,7 @@ export function createProbeFrame(fileId: string): ArrayBuffer {
 //
 // Wire format (compact ACK):       {"t":"a","f":"XXXXXX","i":N}
 // Wire format (compact ack-start): {"t":"s","f":"XXXXXX"}
-// Wire format (compact probe-ack): {"t":"p","f":"XXXXXX"}
+// Wire format (compact probe-ack): {"t":"p","f":"XXXXXX","q":N}
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -203,7 +203,7 @@ export function createCompactAckStartFrame(fileId: string): ArrayBuffer {
 }
 
 /**
- * Creates a compact ACK for a link-check probe.
+ * Creates a compact ACK for a readiness probe.
  */
 export function createCompactProbeAckFrame(fileId: string, quality: number): ArrayBuffer {
     const obj = { t: 'p', f: getAckToken(fileId), q: Math.max(0, Math.min(100, Math.round(quality))) };
@@ -222,7 +222,7 @@ export function createCompactProbeAckFrame(fileId: string, quality: number): Arr
  * Parsed representation of a compact ACK frame.
  */
 export interface CompactAck {
-    /** `'ack'` for data, `'ack-start'` for handshake, `'probe-ack'` for link checks. */
+    /** `'ack'` for data, `'ack-start'` for handshake, `'probe-ack'` for readiness probes. */
     type: 'ack' | 'ack-start' | 'probe-ack';
     /** The 6-character hex token derived from the sender's fileId. */
     token: string;

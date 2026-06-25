@@ -14,7 +14,7 @@ Current live-identification version: **Mango Modem 1.3.0** (`2026050706`, protoc
 - Visible version code/name on the page so the live build can be identified.
 - Single acoustic setup path tuned for phone/laptop speaker and microphone transfer.
 - ACK listener is armed before each send, and receiver ACKs are repeated after a turnaround delay.
-- Acoustic calibration independently scores sender-to-receiver and receiver-to-sender audio before file transfer.
+- Local acoustic self-test verifies each device's own speaker-to-microphone path before file transfer.
 - Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
 
 ## Requirements
@@ -34,7 +34,7 @@ Open the local Vite URL in two tabs or on two devices. Click **Start Receiving**
 
 For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the setup prioritizes reliability over speed.
 
-Start listening on the receiver, then run **Calibrate Link** on the sender. The sender reports two scores: outgoing sound heard by the receiver, and return sound heard by the sender. If either score is weak, adjust volume, distance, and speaker/mic alignment on the relevant device, then calibrate again.
+Run **Test This Device** on each physical device before using it to send or receive. The self-test plays the local data and ACK tone bands through that device's speaker and verifies that the same device's microphone can decode them. If either score is weak, adjust volume, distance, and speaker/mic alignment on that device, then test again.
 
 ## Optical Flash Direction
 
@@ -54,6 +54,7 @@ npm audit --audit-level=moderate
 - `src/dsp`: 4-FSK modem, AudioWorklet receiver, channel constants.
 - `src/transport`: framing, compact ACKs, CRC validation, file reassembly.
 - `src/ui`: sender/receiver UI wiring and spectrogram rendering.
+- `docs/PLATFORM_SPEC.md`: portable product, protocol, and implementation specification.
 - `docs/TECHNICAL_PLAN.md`: original architecture plan and future roadmap.
 - `docs/TASKS.md`: project status and development roadmap.
 

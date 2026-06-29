@@ -56,22 +56,22 @@ export const PREAMBLE_TONE = 1;
  * tones (400–1600 Hz) while remaining within the passband of every consumer
  * speaker and microphone (≤ ~8 kHz):
  *
- *   k = 22 → 22 × 100 = 2200 Hz
- *   k = 26 → 26 × 100 = 2600 Hz
- *   k = 30 → 30 × 100 = 3000 Hz
- *   k = 34 → 34 × 100 = 3400 Hz
+ *   k = 18 → 18 × 100 = 1800 Hz
+ *   k = 21 → 21 × 100 = 2100 Hz
+ *   k = 24 → 24 × 100 = 2400 Hz
+ *   k = 27 → 27 × 100 = 2700 Hz
  *
  * Because the ACK listener on the sender side only looks for tones in this
  * upper band, the sender's own outgoing data transmissions (400–1600 Hz)
  * cannot be misinterpreted as incoming ACKs, eliminating self-reception errors.
- * k values are doubled relative to the old 5 ms configuration to maintain the
- * same physical frequencies with the new 10 ms symbol window.
+ * The band is intentionally kept below the previous 3.4 kHz ceiling so local
+ * self-test and repeated ACKs are less sharp at normal laptop/phone volume.
  */
-export const ACK_K_VALUES = [22, 26, 30, 34] as const;
+export const ACK_K_VALUES = [18, 21, 24, 27] as const;
 
 /**
  * Preamble tone index into ACK_K_VALUES.
- * Index 1 → k = 26 → 2600 Hz.
+ * Index 1 → k = 21 → 2100 Hz.
  */
 export const ACK_PREAMBLE_TONE = 1;
 

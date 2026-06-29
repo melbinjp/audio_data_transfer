@@ -32,7 +32,7 @@ export const ACOUSTIC_SETTINGS: AcousticSettings = {
         maxRetries: 8,
         maxHandshakeRetries: -1,
         postAckGuardMs: 900,
-        transmitter: { gain: 0.95 },
+        transmitter: { gain: 0.45 },
         ackListen: { silenceThreshold: 0.0025, toneDominanceRatio: 0.32 },
     },
     receiver: {
@@ -40,7 +40,7 @@ export const ACOUSTIC_SETTINGS: AcousticSettings = {
         ackRepeatCount: 3,
         ackRepeatGapMs: 180,
         listen: { silenceThreshold: 0.0025, toneDominanceRatio: 0.32 },
-        ackTransmitter: { gain: 1 },
+        ackTransmitter: { gain: 0.4 },
     },
 };
 

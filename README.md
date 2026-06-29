@@ -2,7 +2,7 @@
 
 A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
 
-Current live-identification version: **Mango Modem 1.3.0** (`2026050706`, protocol `3`).
+Current live-identification version: **Mango Modem 1.3.1** (`2026062501`, protocol `4`).
 
 ## What Works
 

@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import {
     FskDecoder,
     ACK_CHANNEL,
+    encodeFrameToAudio,
 } from './fsk-modem';
 
 import {
@@ -96,6 +97,15 @@ describe('FSK modem headless loopback', () => {
         expect(pcm1.length).toBeGreaterThan(0);
     });
 
+    it('encodeFrameToAudio fades the active frame edges', () => {
+        const frame = new Uint8Array([0, 5, 72, 101, 108, 108, 111]).buffer;
+        const pcm = encodeFrameToAudio(frame, SYMBOL_SAMPLES, SAMPLE_RATE);
+        const activeSamples = pcm.length - GUARD_SYMBOLS * SYMBOL_SAMPLES;
+
+        expect(Math.abs(pcm[0])).toBeLessThan(1e-6);
+        expect(Math.abs(pcm[activeSamples - 1])).toBeLessThan(1e-6);
+    });
+
     it('single-frame loopback: encoded bytes match decoded bytes', () => {
         const payload = 'Hello FSK!';
         const fileBuffer = new TextEncoder().encode(payload).buffer;
@@ -158,7 +168,7 @@ describe('FSK modem headless loopback', () => {
         const ackFrame = createCompactAckFrame(fileId, 3);
 
         // ACK channel uses different k-values and preamble tone
-        const ACK_K_VALUES = [22, 26, 30, 34];
+        const ACK_K_VALUES = [18, 21, 24, 27];
         const ACK_PREAMBLE_TONE = 1;
         const ACK_PREAMBLE_SYMBOLS = 30;
 

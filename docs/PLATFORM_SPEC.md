@@ -175,9 +175,9 @@ raw_bit_rate: 200 bps
 raw_byte_rate: 25 bytes/s before framing, ACK, guard, and retry overhead
 sync_byte: 0xab
 data_channel_k_values: [4, 8, 12, 16]
-ack_channel_k_values: [22, 26, 30, 34]
+ack_channel_k_values: [18, 21, 24, 27]
 data_channel_hz: about [400, 800, 1200, 1600]
-ack_channel_hz: about [2200, 2600, 3000, 3400]
+ack_channel_hz: about [1800, 2100, 2400, 2700]
 data_preamble_symbols: 40
 ack_preamble_symbols: 70
 guard_symbols: 12

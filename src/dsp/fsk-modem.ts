@@ -86,7 +86,7 @@ export const DATA_CHANNEL: ChannelConfig = {
 };
 
 /**
- * ACK back-channel (receiver → sender): tones at 2200, 2600, 3000, 3400 Hz.
+ * ACK back-channel (receiver → sender): tones at 1800, 2100, 2400, 2700 Hz.
  *
  * Using a frequency band completely above the data channel ensures the sender's
  * ACK listener cannot decode its own outgoing data transmissions as ACKs.
@@ -125,6 +125,9 @@ export interface FskSignal {
     dominance: number;
 }
 
+const DEFAULT_OUTPUT_GAIN = 0.45;
+const FRAME_FADE_MS = 2;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +160,21 @@ function synthesiseTone(
         out[i] = Math.sin(twoPiFreqOverSr * i);
     }
     return out;
+}
+
+function applyFrameEnvelope(pcm: Float32Array, activeSamples: number, sampleRate: number): void {
+    const fadeSamples = Math.min(
+        Math.round((FRAME_FADE_MS * sampleRate) / 1000),
+        Math.floor(activeSamples / 2),
+    );
+    if (fadeSamples <= 1) return;
+
+    for (let i = 0; i < fadeSamples; i++) {
+        const gain = i / (fadeSamples - 1);
+        pcm[i] *= gain;
+        const endIndex = activeSamples - 1 - i;
+        pcm[endIndex] *= gain;
+    }
 }
 
 /** Encode one byte as four 4-FSK symbol indices (MSB-first, 2 bits each). */
@@ -211,6 +229,8 @@ export function encodeFrameToAudio(
 
     // 4. Acoustic checksum byte
     for (const s of byteToSymbols(checksum)) writeTone(s);
+
+    applyFrameEnvelope(pcm, writePos, sampleRate);
 
     // 5. Guard silence — already zero-initialised; writePos not advanced further.
 
@@ -362,7 +382,7 @@ export function primeAudio(): void {
  *
  * @param channel  Which frequency channel to transmit on.
  *                 Defaults to DATA_CHANNEL (400–1600 Hz) for the sender.
- *                 Pass ACK_CHANNEL (2200–3400 Hz) when the receiver sends ACKs.
+ *                 Pass ACK_CHANNEL (1800–2700 Hz) when the receiver sends ACKs.
  */
 export class TransmitterSession {
     private ctx: AudioContext | null = null;
@@ -415,7 +435,7 @@ export class TransmitterSession {
 
             const src = ctx.createBufferSource();
             const gain = ctx.createGain();
-            gain.gain.value = this.options.gain ?? 0.9;
+            gain.gain.value = this.options.gain ?? DEFAULT_OUTPUT_GAIN;
             src.buffer = audioBuf;
             src.connect(gain);
             gain.connect(ctx.destination);
@@ -690,7 +710,7 @@ export class FskDecoder {
  * @param onData   Invoked with each complete, checksum-verified application frame.
  * @param channel  Which frequency channel to listen on.
  *                 Defaults to DATA_CHANNEL (400-1600 Hz) for the receiver.
- *                 Pass ACK_CHANNEL (2200-3400 Hz) when the sender listens for ACKs.
+ *                 Pass ACK_CHANNEL (1800-2700 Hz) when the sender listens for ACKs.
  */
 export async function startListening(
     onData: (data: ArrayBuffer) => void,
@@ -713,7 +733,7 @@ export async function startListening(
         // Disable all browser audio-processing pipelines. Echo cancellation
         // and noise suppression specifically target the 300-3400 Hz voice band,
         // which overlaps exactly with the FSK data channel (400-1600 Hz) and
-        // ACK channel (2200-3400 Hz). Leaving them enabled causes the browser
+        // ACK channel (1800-2700 Hz). Leaving them enabled causes the browser
         // to attenuate or distort the FSK tones before they reach the Goertzel
         // detector, producing sync mismatches and failed transfers.
         audio: {

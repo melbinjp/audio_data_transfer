@@ -1,44 +1,48 @@
 # Data Over Audio
 
-A browser-based file transfer experiment that sends arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker, and another listens through its microphone, acknowledges received frames, reassembles the file, and offers it for download.
+An experimental browser application that transfers arbitrary files through audible 4-FSK audio. One browser tab or device plays encoded frames through its speaker; another listens through its microphone, acknowledges valid frames, reassembles the file, and offers it for download.
 
-Current live-identification version: **Mango Modem 1.3.1** (`2026062501`, protocol `4`).
+The transfer path uses sound instead of Wi-Fi, Bluetooth, or a local network. The web app still needs to be loaded in a browser, and the result is intentionally much slower than a normal file-transfer tool.
 
-## What Works
+**Live demo:** [audiosen.wecanuseai.com](https://audiosen.wecanuseai.com)
+
+**Current build:** Mango Modem 1.3.1 (`2026062501`, protocol `4`)
+
+## What is implemented
 
 - File selection and acoustic transmission from the sender panel.
 - Microphone-based receiving with a live frequency display.
-- Binary-safe frame format with CRC32 payload validation.
-- Stop-and-wait acknowledgements over a separate high-frequency ACK channel.
+- Binary-safe framing with CRC32 payload validation.
+- Stop-and-wait acknowledgements on a separate acoustic ACK channel.
 - Retries with exponential backoff when ACKs are not received.
-- Visible version code/name on the page so the live build can be identified.
-- Single acoustic setup path tuned for phone/laptop speaker and microphone transfer.
-- ACK listener is armed before each send, and receiver ACKs are repeated after a turnaround delay.
-- Local acoustic self-test verifies each device's own speaker-to-microphone path before file transfer.
-- Headless tests for framing, reassembly, receiver UI behavior, and modem loopback.
+- Visible application and protocol identity in the UI.
+- Local speaker-to-microphone self-test before transfer.
+- Headless tests for framing, reassembly, receiver behavior, modem loopback, and simulated end-to-end transfer.
 
-## Requirements
+## How to use it
 
-- Node.js 20.19 or newer, or Node.js 22.12 or newer.
-- A modern browser with Web Audio API, AudioWorklet, and microphone support.
-- `localhost` or HTTPS. Browser microphone access is blocked on ordinary insecure origins.
+1. Open the [live demo](https://audiosen.wecanuseai.com), or run the app locally.
+2. Open two browser tabs or use two physical devices.
+3. Start receiving on the receiver first.
+4. Run **Test This Device** on each device and adjust volume, distance, or alignment if the test is weak.
+5. Select a file on the sender and start the transfer.
 
-## Run Locally
+Keep the devices close, use moderate volume, and start with a small file. This is a research and learning experiment, not a replacement for Wi-Fi, Bluetooth, USB, or LAN file sharing.
+
+## Run locally
+
+Requirements:
+
+- Node.js 20.19+ or 22.12+
+- A modern browser with Web Audio API, AudioWorklet, and microphone support
+- `localhost` or HTTPS for microphone access
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open the local Vite URL in two tabs or on two devices. Click **Start Receiving** on the receiver first, then choose a file and click **Send File** on the sender.
-
-For best results, keep devices close together, use moderate speaker volume, and test with a small file first. Audio transfer is slow by design because the setup prioritizes reliability over speed.
-
-Run **Test This Device** on each physical device before using it to send or receive. The self-test plays the local data and ACK tone bands through that device's speaker and verifies that the same device's microphone can decode them. If either score is weak, adjust volume, distance, and speaker/mic alignment on that device, then test again.
-
-## Optical Flash Direction
-
-The planned screen/camera mode should use high-contrast light pulses, not QR codes. The protocol should be an on/off keyed optical transport with Manchester timing, a calibration preamble, CRC checks, and fountain-style redundancy so the receiver can recover even if camera frames are dropped. The same framing and reassembly layer can be reused once the optical symbol decoder is added.
+Then open the Vite URL in two tabs or on two devices.
 
 ## Checks
 
@@ -49,12 +53,19 @@ npm run build
 npm audit --audit-level=moderate
 ```
 
-## Project Layout
+## Project layout
 
-- `src/dsp`: 4-FSK modem, AudioWorklet receiver, channel constants.
-- `src/transport`: framing, compact ACKs, CRC validation, file reassembly.
-- `src/ui`: sender/receiver UI wiring and spectrogram rendering.
-- `docs/PLATFORM_SPEC.md`: portable product, protocol, and implementation specification.
-- `docs/TECHNICAL_PLAN.md`: original architecture plan and future roadmap.
-- `docs/TASKS.md`: project status and development roadmap.
+```text
+src/dsp/          4-FSK modem, channels, and AudioWorklet receiver
+src/transport/    framing, CRC validation, ACKs, and file reassembly
+src/ui/           sender, receiver, self-test, and spectrogram wiring
+docs/             protocol specification, technical plan, and task status
+```
 
+## Roadmap
+
+An optical screen-to-camera transport is described as a planned extension in [`docs/PLATFORM_SPEC.md`](docs/PLATFORM_SPEC.md). It is not implemented in the current build.
+
+## License
+
+ISC. See [`LICENSE.md`](LICENSE.md).

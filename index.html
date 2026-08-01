@@ -26,6 +26,16 @@
       .status { min-height: 1.5em; color: #374151; }
       canvas { width: 100%; max-width: 512px; height: 150px; border: 1px solid #c6c9c0; background: #f0f0f0; }
       a { color: #135f46; font-weight: 700; }
+
+      /* WeCanUseAI shared site footer. Kept identical in behaviour to the other
+         tools: the link row wraps rather than overflowing a narrow screen, links
+         are 44px tall for touch, and the divider is a mid grey that reads on
+         light and dark alike. */
+      .wcua-footer { box-sizing: border-box; width: 100%; margin-top: 2rem; padding: 1.5rem 1rem; border-top: 1px solid rgb(128 128 128 / 25%); color: #5c6670; font-size: 0.875rem; line-height: 1.5; text-align: center; }
+      .wcua-footer p { margin: 0; }
+      .wcua-footer-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 1.5rem; margin-top: 0.25rem; }
+      .wcua-footer-links a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.25rem; color: inherit; text-decoration: none; }
+      .wcua-footer-links a:hover, .wcua-footer-links a:focus-visible { text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -62,6 +72,21 @@
       </div>
     </main>
 
+    <footer role="contentinfo" class="wcua-footer">
+      <p>&copy; <span class="copyright-year"></span> WeCanUseAI. Empowering creativity with AI.</p>
+      <nav class="wcua-footer-links" aria-label="Footer navigation">
+        <a href="https://wecanuseai.com/">Home</a>
+        <a href="https://wecanuseai.com/privacy.html">Privacy</a>
+        <a href="https://wecanuseai.com/terms.html">Terms</a>
+        <a href="https://wecanuseai.com/contact.html">Contact</a>
+      </nav>
+    </footer>
+
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      document.querySelectorAll('.copyright-year').forEach(el => {
+        el.textContent = new Date().getFullYear();
+      });
+    </script>
   </body>
 </html>

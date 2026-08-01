@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Data Over Audio</title>
+  <meta name="description" content="Send data between devices using sound: information encoded into audio, with send and receive modes.">
+  <link rel="canonical" href="https://audiosen.wecanuseai.com/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="WeCanUseAI">
+  <meta property="og:title" content="AudioSen">
+  <meta property="og:description" content="Send data between devices using sound: information encoded into audio, with send and receive modes.">
+  <meta property="og:url" content="https://audiosen.wecanuseai.com/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="AudioSen">
+  <meta name="twitter:description" content="Send data between devices using sound: information encoded into audio, with send and receive modes.">
+  <link rel="icon" type="image/x-icon" href="https://favicon.wecanuseai.com/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://favicon.wecanuseai.com/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="https://favicon.wecanuseai.com/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://favicon.wecanuseai.com/apple-touch-icon-180x180.png">
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; background: #f7f7f4; color: #1f2933; }
+      main { max-width: 880px; margin: 0 auto; padding: 24px; }
+      header, section { margin-bottom: 18px; }
+      h1 { margin: 0 0 6px; font-size: 2rem; }
+      h2 { margin: 0 0 12px; font-size: 1.1rem; }
+      .version { margin: 0; color: #5c6670; }
+      .panel { border: 1px solid #d7d9d2; background: #fff; border-radius: 8px; padding: 16px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+      label { font-weight: 650; }
+      button, select, input::file-selector-button {
+        border: 1px solid #8a9484; border-radius: 6px; background: #eef2ea; color: #172017;
+        min-height: 36px; padding: 0 12px; font: inherit; cursor: pointer;
+      }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      input[type="file"] { max-width: 100%; }
+      progress { width: 100%; height: 14px; }
+      .status { min-height: 1.5em; color: #374151; }
+      canvas { width: 100%; max-width: 512px; height: 150px; border: 1px solid #c6c9c0; background: #f0f0f0; }
+      a { color: #135f46; font-weight: 700; }
+
+      /* WeCanUseAI shared site footer. Kept identical in behaviour to the other
+         tools: the link row wraps rather than overflowing a narrow screen, links
+         are 44px tall for touch, and the divider is a mid grey that reads on
+         light and dark alike. */
+      .wcua-footer { box-sizing: border-box; width: 100%; margin-top: 2rem; padding: 1.5rem 1rem; border-top: 1px solid rgb(128 128 128 / 25%); color: #5c6670; font-size: 0.875rem; line-height: 1.5; text-align: center; }
+      .wcua-footer p { margin: 0; }
+      .wcua-footer-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 1.5rem; margin-top: 0.25rem; }
+      .wcua-footer-links a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.25rem; color: inherit; text-decoration: none; }
+      .wcua-footer-links a:hover, .wcua-footer-links a:focus-visible { text-decoration: underline; }
+    </style>
+    <script type="module" crossorigin src="./assets/index-B9qJIND0.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Data Over Audio</h1>
+        <p class="version">Version: <strong id="app-version">Loading...</strong></p>
+      </header>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Sender</h2>
+          <div class="row">
+            <button id="self-test-button">Test This Device</button>
+            <span>Local sound: <strong id="self-test-status">Not tested</strong></span>
+          </div>
+          <div class="row">
+            <label for="file-picker">File</label>
+            <input type="file" id="file-picker" />
+          </div>
+          <button id="send-button" disabled>Send File</button>
+          <p class="status">Status: <span id="sender-status">Idle</span></p>
+          <progress id="send-progress" value="0" max="100"></progress>
+        </section>
+
+        <section class="panel">
+          <h2>Receiver</h2>
+          <button id="receive-button">Start Listening</button>
+          <p class="status">Status: <span id="receiver-status">Idle</span></p>
+          <progress id="receive-progress" value="0" max="100"></progress>
+          <canvas id="spectrogram-canvas" width="512" height="150"></canvas>
+          <p><a id="download-link" style="display: none;"></a></p>
+        </section>
+      </div>
+    </main>
+
+    <footer role="contentinfo" class="wcua-footer">
+      <p>&copy; <span class="copyright-year"></span> WeCanUseAI. Empowering creativity with AI.</p>
+      <nav class="wcua-footer-links" aria-label="Footer navigation">
+        <a href="https://wecanuseai.com/">Home</a>
+        <a href="https://wecanuseai.com/privacy.html">Privacy</a>
+        <a href="https://wecanuseai.com/terms.html">Terms</a>
+        <a href="https://wecanuseai.com/contact.html">Contact</a>
+      </nav>
+    </footer>
+
+    <script>
+      document.querySelectorAll('.copyright-year').forEach(el => {
+        el.textContent = new Date().getFullYear();
+      });
+    </script>
+  </body>
+</html>
